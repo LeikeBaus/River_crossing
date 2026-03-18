@@ -2,34 +2,29 @@
 
 ## 1. Motivation
 
-Dieses Projekt untersucht das Problem der optimalen Navigation eines Schiffes in einem Fluss mit Strömung. Ein Schiff soll von einem Startpunkt A an einem Ufer zu einem Zielpunkt B am gegenüberliegenden Ufer navigieren.
+Ziel dieses Projekts ist die Untersuchung und der Vergleich verschiedener Pfadplanungsalgorithmen für die Navigation eines Schiffes in einem Fluss mit Strömung.
 
-Ziel ist es, eine Trajektorie zu bestimmen, die
-- die Überquerungszeit minimiert,
-- den Energieverbrauch minimiert,
-- oder eine gewichtete Kombination beider Größen optimiert.
+Das Szenario orientiert sich an der realen Fährverbindung zwischen zwei leicht versetzten Anlegestellen. Das Schiff startet an einem Punkt A und muss einen Zielpunkt B am gegenüberliegenden Ufer erreichen. Aufgrund der Lage der Anlegestellen ist eine direkte frontale Anfahrt nicht möglich. Stattdessen muss das Ziel in einem Winkelbereich von 30° bis 60° relativ zur Uferlinie angefahren werden.
 
-Das Problem wird als diskretes 2D-Gittermodell formuliert und mithilfe klassischer Pfadalgorithmen sowie Reinforcement Learning untersucht. Der Fokus liegt auf einer sauberen mathematischen Modellierung, modularer Software-Architektur und reproduzierbaren Experimenten.
+Optimiert wird ausschließlich die Überquerungszeit.
 
 ## 2. Mathematische Problemformulierung
 
 ### 2.1 Zustandsraum
 
-Die Environment ist ein diskretes Gitter:
+Die Umgebung wird als diskretes 2D-Gitter modelliert:
 
 S = { (i, j) | i ∈ {0, …, N_x − 1}, j ∈ {0, …, N_y − 1} }
 
-Jeder Zustand s ∈ S repräsentiert eine Gitterzelle.
+Jeder Zustand s ∈ S entspricht einer Position des Schiffes im Fluss.
 
 Jedem Zustand ist ein Strömungsvektor zugeordnet:
 
 u_flow : S → ℝ²
 
-u_flow(s) = ( u_x(s), u_y(s) )ᵀ
-
 Im einfachsten Fall ist die Strömung konstant:
 
-u_flow(s) = u₀ ∈ ℝ² für alle s ∈ S.
+u_flow(s) = u₀ für alle s ∈ S
 
 ### 2.2 Aktionsraum
 
@@ -55,8 +50,6 @@ mit
 T(s, a) = clip(s + a)
 
 wobei clip sicherstellt, dass der Folgezustand innerhalb des Gitters liegt.
-
-Die Strömung beeinflusst im diskreten Modell nicht direkt die Position, sondern geht in die Übergangskosten ein.
 
 ### 2.4 Kostenfunktion
 
@@ -88,6 +81,22 @@ J(π) = Σ_{t=0}^{T−1} c(s_t, a_t)
 Gesucht ist ein optimaler Pfad
 
 π* = argmin_π J(π)
+
+### 2.5 Randbedindung: Anfahrtwinkel
+
+Das Ziel darf nur erreicht werden, wenn der letzte Bewegungsvektor a_T einen Winkel θ im Bereich
+
+30° ≤ θ ≤ 60°
+
+relativ zur Uferlinie bzw. Zielorientierung erfüllt.
+
+Formal:
+
+θ = arccos( ⟨a_T, n⟩ / (||a_T|| · ||n||) )
+
+mit n als Normalenvektor der Anlegestelle.
+
+Zustände, die diese Bedingung nicht erfüllen, gelten nicht als gültige Zielzustände.
 
 ## 3. Zielsetzung
 
@@ -160,7 +169,27 @@ V_{k+1}(s) = min_{a ∈ A} [ c(s, a) + γ V_k(T(s, a)) ]
 
 mit Diskontfaktor γ ∈ (0,1].
 
-### 4.5 Reinforcement Learning – Q-Learning
+### 4.5 Artificial Potential Field (APF)
+
+Definition eines Potentials über dem Zustandsraum:
+
+Φ(s) = Φ_att(s) + Φ_flow(s)
+
+Attraktives Potential:
+
+Φ_att(s) = 1/2 · k_att · || s − s_goal ||²
+
+Strömungseinfluss:
+
+Φ_flow(s) = −λ · ⟨ s, u_flow(s) ⟩
+
+Die Bewegung erfolgt entlang des negativen Gradienten:
+
+a*(s) ≈ argmin_{a ∈ A} ⟨ a, ∇Φ(s) ⟩
+
+Die diskrete Aktion wird als beste Approximation des kontinuierlichen Gradienten gewählt.
+
+### 4.6 Reinforcement Learning – Q-Learning
 
 Q-Learning approximiert die optimale Aktionswertfunktion Q*.
 
@@ -261,7 +290,7 @@ Ziele:
 - Vergleichbarkeit von Experimenten,
 - automatisierte Batch-Experimente.
 
-8. Visualisierung (UI)
+## 8. Visualisierung (UI)
 
 Die UI visualisiert:
 - Gitterstruktur,
