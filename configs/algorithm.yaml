@@ -1,0 +1,28 @@
+common:
+  alpha: 1.0
+  beta: 0.0
+
+dijkstra: {}
+
+a_star:
+  heuristic: euclidean
+
+weighted_a_star:
+  heuristic: euclidean
+  weight: 1.5
+
+dynamic_programming:
+  gamma: 1.0
+  tolerance: 1.0e-6
+  max_iterations: 10000
+
+apf:
+  k_att: 1.0
+  lambda_flow: 0.2
+
+q_learning:
+  learning_rate: 0.1
+  gamma: 0.99
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay: 0.995

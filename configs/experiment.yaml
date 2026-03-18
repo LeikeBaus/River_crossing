@@ -1,0 +1,22 @@
+seeds: [1, 2, 3, 4, 5]
+
+environments:
+  - name: baseline
+    env_config: configs/env.yaml
+
+algorithms:
+  - dijkstra
+  - a_star
+  - weighted_a_star
+  - dynamic_programming
+  - apf
+  - q_learning
+
+metrics:
+  - total_time
+  - path_length
+  - plan_time
+  - training_time
+  - inference_time
+  - angle_valid
+  - delta_j
