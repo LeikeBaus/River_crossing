@@ -302,3 +302,54 @@ Die UI visualisiert:
 Optional:
 - animierte Bewegung,
 - Filter nach Algorithmus, Run, Seed.
+
+## 9. Ergebnisartekfakt
+Das Ergebnisartefakt dieses Projekts besteht aus einem konsistenten und reproduzierbaren Satz an Experimenten sowie deren Auswertung. Es dient dazu, die implementierten Algorithmen unter identischen Bedingungen vergleichbar zu machen und ihre Eigenschaften systematisch zu analysieren. Dabei stehen sowohl die Qualität der gefundenen Lösungen als auch der Rechenaufwand und – im Fall von Reinforcement Learning – das Lernverhalten im Fokus.
+
+### 9.1 Experimentelle Datensätze
+
+Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des zulässigen Anfahrwinkels.
+
+Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der die resultierende Trajektorie des Schiffes beschreibt. Diese Trajektorie ist eine Folge diskreter Zustände
+π = (s₀, s₁, …, s_T)
+und wird zusammen mit den zugehörigen Aktionen gespeichert. Aus ihr wird die Gesamtzeit berechnet:
+
+J(π) = Σ t(s_t, a_t)
+
+Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der Anfahrbedingung überprüfen zu können.
+
+Neben diesen pfadbezogenen Größen wird auch der Rechenaufwand protokolliert. Bei den graphbasierten Verfahren und beim Potentialfeld entspricht dies der Planungszeit bis zur Lösung. Beim Q-Learning werden sowohl die Trainingsdauer als auch die Ausführungszeit der gelernten Policy erfasst. Darüber hinaus werden für das Reinforcement Learning der Reward-Verlauf über die Episoden hinweg sowie die resultierende Politik gespeichert, um Aussagen über das Konvergenzverhalten treffen zu können.
+
+Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet werden können.
+
+### 9.2 Analyse und Vergleich
+
+Auf Basis der erzeugten Datensätze erfolgt eine systematische Auswertung der Algorithmen. Ein zentraler Bezugspunkt ist dabei die optimale Lösung, die mit Dijkstra oder Dynamic Programming bestimmt wird. Für jeden Algorithmus wird die Abweichung von dieser Referenz berechnet:
+
+ΔJ = J_algo − J_optimal
+
+Diese Größe erlaubt eine direkte Aussage über die Lösungsqualität.
+
+Ergänzend dazu wird die benötigte Rechenzeit betrachtet, sowohl in absoluten Werten als auch in Abhängigkeit von der Problemgröße. Dadurch lässt sich der typische Zielkonflikt zwischen Optimalität und Effizienz sichtbar machen, insbesondere im Vergleich zwischen A*, Weighted A* und den vollständig optimalen Verfahren.
+
+Für das Q-Learning wird zusätzlich das Lernverhalten analysiert. Hierbei steht im Vordergrund, wie schnell sich eine stabile Strategie entwickelt und wie stark die Ergebnisse zwischen verschiedenen Durchläufen variieren. Der Verlauf der kumulierten Rewards pro Episode dient dabei als zentrales Diagnoseinstrument.
+
+Ein weiterer Aspekt der Analyse ist die Sensitivität gegenüber der Strömung. Durch Variation von Richtung und Stärke des Strömungsvektors wird untersucht, wie sich die resultierenden Pfade verändern und wie robust die einzelnen Verfahren auf diese Änderungen reagieren. Ebenso wird betrachtet, welchen Einfluss die Einschränkung des Anfahrwinkels auf die Lösungsstruktur und die Planungszeit hat.
+
+### 9.3 Visuelle Aufbereitung
+
+Ein wesentlicher Bestandteil des Ergebnisartefakts ist die visuelle Darstellung der Ergebnisse. Für ausgewählte Szenarien werden die berechneten Trajektorien direkt im Gitter visualisiert. Dabei werden sowohl die Strömungsvektoren als auch der zulässige Anfahrkorridor am Zielpunkt dargestellt.
+
+Diese Visualisierung ermöglicht es, Unterschiede zwischen den Algorithmen unmittelbar nachzuvollziehen. Insbesondere lassen sich typische Verhaltensweisen erkennen, etwa Umwege zur Einhaltung des Anfahrwinkels oder lokale Fehlentscheidungen beim Potentialfeldansatz.
+
+Ergänzend dazu kann die Bewegung des Schiffes entlang der Trajektorie animiert werden, um den zeitlichen Verlauf der Entscheidungsschritte sichtbar zu machen.
+
+### 9.4 Reproduzierbarkeit
+
+Alle Experimente sind vollständig über Konfigurationsdateien definiert. Ein Lauf ist eindeutig bestimmt durch die Environment-Parameter, die Algorithmuskonfiguration und – im Fall von Reinforcement Learning – den verwendeten Zufalls-Seed.
+
+Dadurch lassen sich sämtliche Ergebnisse reproduzieren und gezielt variieren. Gleichzeitig wird sichergestellt, dass unterschiedliche Algorithmen unter exakt denselben Bedingungen verglichen werden.
+
+### 9.5 Zusammenfassung
+
+Das Ergebnisartefakt stellt einen strukturierten und nachvollziehbaren Vergleich verschiedener Pfadplanungsverfahren in einer strömungsbehafteten Umgebung dar. Es verbindet experimentelle Daten, quantitative Auswertung und visuelle Analyse zu einem konsistenten Gesamtbild und ermöglicht damit eine fundierte Bewertung der eingesetzten Methoden.
