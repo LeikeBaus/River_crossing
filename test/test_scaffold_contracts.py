@@ -21,13 +21,11 @@ class ScaffoldContractTests(unittest.TestCase):
         for path in expected_paths:
             self.assertTrue(path.exists(), f"Missing required scaffold file: {path}")
 
-    def test_placeholders_raise_not_implemented(self) -> None:
-        with self.assertRaises(NotImplementedError):
-            run_all_experiments()
+    def test_experiment_entrypoints_exist(self) -> None:
+        self.assertTrue(callable(run_all_experiments))
+        self.assertTrue(callable(evaluate_results))
 
-        with self.assertRaises(NotImplementedError):
-            evaluate_results()
-
+    def test_visualization_placeholder_raises_not_implemented(self) -> None:
         with self.assertRaises(NotImplementedError):
             render()
 
