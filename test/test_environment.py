@@ -6,7 +6,7 @@ import math
 import unittest
 
 from core.dynamics.flow import ConstantFlow, make_flow
-from core.environment.actions import ACTIONS, apply_action
+from core.environment.actions import ACTIONS, apply_action, is_action_valid
 from core.environment.environment import DockingConfig, RiverEnvironment
 from core.environment.grid import Grid, State
 
@@ -130,32 +130,37 @@ class TestApplyAction(unittest.TestCase):
         result = apply_action(State(2, 2), (1, 1), self.grid)
         self.assertEqual(result, State(3, 3))
 
-    def test_clipped_at_north_wall(self) -> None:
-        result = apply_action(State(2, 4), (0, 1), self.grid)
-        self.assertEqual(result, State(2, 4))  # j stays at ny-1
+    def test_invalid_at_north_wall_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            apply_action(State(2, 4), (0, 1), self.grid)
 
-    def test_clipped_at_east_wall(self) -> None:
-        result = apply_action(State(4, 2), (1, 0), self.grid)
-        self.assertEqual(result, State(4, 2))  # i stays at nx-1
+    def test_invalid_at_east_wall_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            apply_action(State(4, 2), (1, 0), self.grid)
 
-    def test_clipped_at_south_wall(self) -> None:
-        result = apply_action(State(2, 0), (0, -1), self.grid)
-        self.assertEqual(result, State(2, 0))
+    def test_invalid_at_south_wall_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            apply_action(State(2, 0), (0, -1), self.grid)
 
-    def test_clipped_at_west_wall(self) -> None:
-        result = apply_action(State(0, 2), (-1, 0), self.grid)
-        self.assertEqual(result, State(0, 2))
+    def test_invalid_at_west_wall_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            apply_action(State(0, 2), (-1, 0), self.grid)
 
-    def test_result_always_in_grid(self) -> None:
-        # Exhaustive check: every state × every action stays inside
+    def test_result_in_grid_for_valid_actions_only(self) -> None:
+        # Exhaustive check: valid state-action pairs always stay inside
         for i in range(self.grid.nx):
             for j in range(self.grid.ny):
                 for action in ACTIONS:
-                    result = apply_action(State(i, j), action, self.grid)
-                    self.assertTrue(
-                        self.grid.contains(result),
-                        msg=f"apply_action({State(i,j)}, {action}) → {result} outside grid",
-                    )
+                    state = State(i, j)
+                    if is_action_valid(state, action, self.grid):
+                        result = apply_action(state, action, self.grid)
+                        self.assertTrue(
+                            self.grid.contains(result),
+                            msg=f"apply_action({state}, {action}) → {result} outside grid",
+                        )
+                    else:
+                        with self.assertRaises(ValueError):
+                            apply_action(state, action, self.grid)
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +286,19 @@ class TestRiverEnvironment(unittest.TestCase):
     def test_transition_clips_at_boundary(self) -> None:
         env = self._make_env()
         s = State(39, 19)
-        next_state = env.transition(s, (1, 1))
-        self.assertEqual(next_state, s)  # clipped, stays in place
+        with self.assertRaises(ValueError):
+            env.transition(s, (1, 1))
+
+    def test_valid_actions_excludes_out_of_grid_moves(self) -> None:
+        env = self._make_env()
+        corner = State(0, 0)
+        valid = set(env.valid_actions(corner))
+        self.assertNotIn((-1, 0), valid)
+        self.assertNotIn((0, -1), valid)
+        self.assertNotIn((-1, -1), valid)
+        self.assertIn((1, 0), valid)
+        self.assertIn((0, 1), valid)
+        self.assertIn((1, 1), valid)
 
     def test_is_goal_requires_correct_position_and_angle(self) -> None:
         env = self._make_env()

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.dynamics.flow import FlowField, FlowVector, make_flow
-from core.environment.actions import ACTIONS, Action, apply_action
+from core.environment.actions import ACTIONS, Action, apply_action, is_action_valid
 from core.environment.grid import Grid, State
 
 
@@ -113,10 +113,19 @@ class RiverEnvironment:
         """Return the full action set (8 Moore-neighbourhood directions)."""
         return ACTIONS
 
+    def valid_actions(self, state: State) -> tuple[Action, ...]:
+        """Return only actions that keep the vessel inside the grid."""
+        return tuple(a for a in self.actions if is_action_valid(state, a, self.grid))
+
     def transition(self, state: State, action: Action) -> State:
         """Apply *action* to *state* and return the next state.
 
-        The result is always clipped to the grid boundary (reflecting walls).
+        Only in-bounds transitions are allowed.
+
+        Raises
+        ------
+        ValueError
+            If the action would leave the grid.
         """
         return apply_action(state, action, self.grid)
 

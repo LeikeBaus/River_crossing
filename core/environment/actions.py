@@ -21,8 +21,14 @@ ACTIONS: Final[tuple[Action, ...]] = (
 )
 
 
+def is_action_valid(state: State, action: Action, grid: Grid) -> bool:
+    """Return True when applying *action* keeps the vessel inside *grid*."""
+    next_state = State(state.i + action[0], state.j + action[1])
+    return grid.contains(next_state)
+
+
 def apply_action(state: State, action: Action, grid: Grid) -> State:
-    """Apply *action* to *state* and clip the result to the grid.
+    """Apply *action* to *state* and return the exact next state.
 
     Parameters
     ----------
@@ -36,7 +42,15 @@ def apply_action(state: State, action: Action, grid: Grid) -> State:
     Returns
     -------
     State
-        Next position, guaranteed to be inside *grid*.
+        Next position.
+
+    Raises
+    ------
+    ValueError
+        If the action would leave the grid.
     """
-    raw = State(state.i + action[0], state.j + action[1])
-    return grid.clip(raw)
+    if not is_action_valid(state, action, grid):
+        raise ValueError(
+            f"Action {action} from state {state} would leave the grid {grid}."
+        )
+    return State(state.i + action[0], state.j + action[1])
