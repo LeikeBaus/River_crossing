@@ -3,7 +3,7 @@ from pathlib import Path
 
 from experiments.evaluator import evaluate_results
 from experiments.runner import run_all_experiments
-from ui.visualization import render
+from ui.visualization import launch_ui, parse_seed_options
 
 
 class ScaffoldContractTests(unittest.TestCase):
@@ -25,9 +25,9 @@ class ScaffoldContractTests(unittest.TestCase):
         self.assertTrue(callable(run_all_experiments))
         self.assertTrue(callable(evaluate_results))
 
-    def test_visualization_placeholder_raises_not_implemented(self) -> None:
-        with self.assertRaises(NotImplementedError):
-            render()
+    def test_visualization_module_exposes_pyqt_entrypoints(self) -> None:
+        self.assertTrue(callable(launch_ui))
+        self.assertEqual(parse_seed_options([1, 3, 5]), ["1", "3", "5"])
 
 
 if __name__ == "__main__":

@@ -14,11 +14,11 @@ Implemented so far:
 - Step 6: Artificial Potential Field (APF).
 - Step 7: Reinforcement Learning: tabular Q-learning.
 - Step 8: Experiment runner + evaluator pipeline with JSON outputs.
+- Step 9: PyQt6 visualization module with single-run rendering, comparison view, and animation controls.
 
 Not implemented yet:
 
-- Step 9+ (notably visualization and final analysis/reporting pipeline extensions).
-- `ui/visualization.py` is still a placeholder.
+- Step 10+ (notably robustness studies and final analysis/reporting pipeline extensions).
 
 ---
 
@@ -457,13 +457,12 @@ Implemented unit-test modules cover:
 - Q-learning training/policy helpers,
 - experiment runner and evaluator.
 
-`test_scaffold_contracts.py` currently confirms scaffold files and that visualization remains a placeholder.
+`test_scaffold_contracts.py` confirms scaffold files and PyQt6 UI entrypoints.
 
 ---
 
 ## 11. Known Gaps / Next Work
 
-- Visualization (`ui/visualization.py`) is not implemented.
 - Analysis/reporting artifacts and richer plotting are pending later steps.
 - `Grid.clip(...)` remains available as utility but is not used by active transition semantics.
 
@@ -498,7 +497,13 @@ pip install -r requirements.txt
 ### 12.3 Sanity Check Config Loading
 
 ```bash
-python main.py
+python main.py check
+```
+
+### 12.3.1 Launch the PyQt6 Desktop UI (M3 Compare + Animation)
+
+```bash
+python main.py ui
 ```
 
 ### 12.4 Run Unit Tests
@@ -515,6 +520,8 @@ python -m test.test_apf
 python -m test.test_q_learning
 python -m test.test_experiments
 python -m test.test_scaffold_contracts
+python -m test.test_visualization
+python -m test.test_main_cli
 ```
 
 ### 12.5 Run Full Experiment Batch and Save Raw Results
