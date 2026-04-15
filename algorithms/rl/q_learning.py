@@ -26,6 +26,24 @@ def _available_actions(env: RiverEnvironment, state: State) -> tuple[Action, ...
     return tuple(actions)
 
 
+def _guidance_targets(env: RiverEnvironment) -> tuple[State, ...]:
+    """Return the goal and valid one-step docking predecessors used for shaping."""
+    targets: dict[State, None] = {env.goal: None}
+    for action in env.actions:
+        candidate = State(env.goal.i - action[0], env.goal.j - action[1])
+        if not env.grid.contains(candidate):
+            continue
+        if env.transition(candidate, action) == env.goal and env.is_goal(env.goal, action):
+            targets[candidate] = None
+    return tuple(sorted(targets.keys(), key=lambda item: (item.i, item.j)))
+
+
+def _guidance_distance(env: RiverEnvironment, state: State) -> float:
+    """Distance to the goal or its valid docking corridor predecessors."""
+    targets = _guidance_targets(env)
+    return min(((state.i - target.i) ** 2 + (state.j - target.j) ** 2) ** 0.5 for target in targets)
+
+
 @dataclass
 class QLearningResult:
     """Result bundle produced by Q-learning training."""
@@ -55,6 +73,10 @@ def q_learning_train(
     epsilon_decay: float = 0.995,
     max_steps_per_episode: int | None = None,
     seed: int | None = None,
+    goal_reward: float = 25.0,
+    progress_reward_scale: float = 1.5,
+    revisit_penalty: float = 0.75,
+    approach_bonus: float = 2.5,
 ) -> QLearningResult:
     """Train a tabular Q-learning agent.
 
@@ -73,6 +95,8 @@ def q_learning_train(
         raise ValueError("epsilon_start must be >= epsilon_end.")
     if not (0 < epsilon_decay <= 1.0):
         raise ValueError(f"epsilon_decay must be in (0,1], got {epsilon_decay}.")
+    if goal_reward < 0 or progress_reward_scale < 0 or revisit_penalty < 0 or approach_bonus < 0:
+        raise ValueError("reward-shaping parameters must be >= 0.")
 
     if max_steps_per_episode is None:
         max_steps_per_episode = 4 * env.grid.nx * env.grid.ny
@@ -100,6 +124,7 @@ def q_learning_train(
         episode_reward = 0.0
         success = False
         steps = 0
+        visited_counts: dict[State, int] = {state: 1}
 
         for _step in range(max_steps_per_episode):
             steps += 1
@@ -110,12 +135,21 @@ def q_learning_train(
             action = _epsilon_greedy_action(q_table, state, actions, epsilon, rng)
             next_state = env.transition(state, action)
 
+            current_distance = _guidance_distance(env, state)
+            next_distance = _guidance_distance(env, next_state)
             reward = -cost_fn(state, action)
-            episode_reward += reward
+            reward += progress_reward_scale * (current_distance - next_distance)
+            reward -= revisit_penalty * visited_counts.get(next_state, 0)
+            if next_state != env.goal and next_distance < 1e-9:
+                reward += approach_bonus
 
             done = next_state == env.goal
             if done:
+                reward += goal_reward
                 success = True
+
+            episode_reward += reward
+            visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
 
             next_actions = _available_actions(env, next_state)
             max_next_q = max((get_q(next_state, a2) for a2 in next_actions), default=0.0)
@@ -180,6 +214,7 @@ def rollout_policy(
     path: list[State] = [state]
     actions: list[Action] = []
     total_cost = 0.0
+    visited_counts: dict[State, int] = {state: 1}
 
     for _ in range(max_steps):
         if state == env.goal:
@@ -198,10 +233,13 @@ def rollout_policy(
         next_state = env.transition(state, action)
         if next_state == env.goal and not env.is_goal(next_state, action):
             break
+        if visited_counts.get(next_state, 0) >= 2:
+            break
 
         total_cost += cost_fn(state, action)
         actions.append(action)
         path.append(next_state)
+        visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
         state = next_state
 
     return PlanResult(
@@ -233,6 +271,10 @@ def q_learning_from_config(
         epsilon_decay=float(q_config.get("epsilon_decay", 0.995)),
         max_steps_per_episode=max_steps_per_episode,
         seed=seed,
+        goal_reward=float(q_config.get("goal_reward", 25.0)),
+        progress_reward_scale=float(q_config.get("progress_reward_scale", 1.5)),
+        revisit_penalty=float(q_config.get("revisit_penalty", 0.75)),
+        approach_bonus=float(q_config.get("approach_bonus", 2.5)),
     )
 
 

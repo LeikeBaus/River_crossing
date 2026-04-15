@@ -171,27 +171,27 @@ mit Diskontfaktor γ ∈ (0,1].
 
 ### 4.5 Artificial Potential Field (APF)
 
-Definition eines Potentials über dem Zustandsraum:
+Das APF verwendet weiterhin ein Potential der Form
 
-Φ(s) = Φ_att(s) + Φ_flow(s)
+Φ(s) = Φ_att(s) + Φ_flow(s),
+
+wird jedoch in der aktuellen Implementierung zusätzlich **andockungsbewusst** geführt. Statt das Schiff nur direkt auf das Ziel auszurichten, wird auch ein gültiger Vorbereich des Ziels berücksichtigt, aus dem der letzte Schritt die Winkelbedingung erfüllen kann.
 
 Attraktives Potential:
 
-Φ_att(s) = 1/2 · k_att · || s − s_goal ||²
+Φ_att(s) = 1/2 · k_att · || s − s_target ||²
+
+wobei s_target je nach Situation entweder das eigentliche Ziel oder ein gültiger Vorzustand des Ziels ist.
 
 Strömungseinfluss:
 
 Φ_flow(s) = −λ · ⟨ s, u_flow(s) ⟩
 
-Die Bewegung erfolgt entlang des negativen Gradienten:
-
-a*(s) ≈ argmin_{a ∈ A} ⟨ a, ∇Φ(s) ⟩
-
-Die diskrete Aktion wird als beste Approximation des kontinuierlichen Gradienten gewählt.
+Die diskrete Aktion wird entlang des negativen Gradienten gewählt und um eine Zusatzbewertung ergänzt, die Zustände außerhalb des gültigen Anfahrkorridors benachteiligt. Dadurch vermeidet der APF das frühere Verhalten, direkt geradeaus zum Ziel zu fahren und dort an der Winkelrestriktion zu scheitern.
 
 ### 4.6 Reinforcement Learning – Q-Learning
 
-Q-Learning approximiert die optimale Aktionswertfunktion Q*.
+Q-Learning approximiert die optimale Aktionswertfunktion Q* weiterhin tabellarisch, verwendet inzwischen aber eine **Reward-Shaping-Strategie**, damit sich eine stabile Andockpolitik schneller ausbildet.
 
 Update-Regel:
 
@@ -205,9 +205,13 @@ mit
 γ ∈ (0,1] (Diskontfaktor),
 r = R(s, a).
 
-Die optimale Politik ergibt sich aus:
+Der Reward enthält dabei heute nicht nur die negativen Bewegungskosten, sondern auch:
+- einen positiven Zielreward für erfolgreiches Andocken,
+- einen Fortschrittsbonus in Richtung Ziel bzw. Andockkorridor,
+- eine Strafe für Wiederbesuche bereits gesehener Zustände,
+- einen Bonus für das Erreichen eines gültigen Vor-Andockzustands.
 
-π*(s) = argmax_{a ∈ A} Q*(s, a)
+Dadurch werden Schleifen und zufälliges Pendeln reduziert und die gelernten Policies deutlich robuster.
 
 ## 5. Vergleichskriterien
 
@@ -272,7 +276,7 @@ river-crossing/
 │
 ├── analysis/
 ├── main.py
-└── README.py
+└── README.md
 
 ## 7. Konfigurationsprinzip
 
@@ -280,9 +284,10 @@ Alle variablen Parameter werden ausschließlich über Konfigurationsdateien defi
 
 Beispiele:
 - Gittergröße (N_x, N_y)
-- Strömungsmodell
+- Strömungsmodell und Strömungsvektor
 - Gewichtungsparameter α, β
-- RL-Parameter (α, γ, ε)
+- APF-Parameter (`k_att`, `lambda_flow`)
+- RL-Parameter (α, γ, ε sowie Reward-Shaping)
 - Anzahl Episoden
 - Random Seeds
 
@@ -294,16 +299,26 @@ Ziele:
 
 ## 8. Visualisierung (UI)
 
-Die UI visualisiert:
+Die aktuelle PyQt6-Oberfläche bietet drei klar getrennte Ansichten:
+- **Run**: zeigt den schrittweisen Aufbau einer Lösung,
+- **Best path**: zeigt und animiert den final besten Pfad eines ausgewählten Laufs,
+- **Compare**: vergleicht die besten Pfade mehrerer Algorithmen im selben Szenario.
+
+Zusätzlich umfasst die UI:
 - Gitterstruktur,
 - Strömungsvektoren,
 - Start- und Zielpunkt,
-- gefundene Trajektorien,
-- Vergleich mehrerer Algorithmen.
+- Animation mit Play, Pause, Step und Reset,
+- Flow-Steuerung über einen QDial für die Richtung,
+- einen Slider für die Strömungsstärke,
+- drei synchronisierte Float-Eingabefelder für x-Richtung, y-Richtung und Stärke.
 
-Optional:
-- animierte Bewegung,
-- Filter nach Algorithmus, Run, Seed.
+Im Run-Tab werden Entscheidungsoptionen farblich hervorgehoben:
+- rot = ungültige Aktion,
+- gelb = gültige, aber nicht gewählte Aktion,
+- grün = aktuell beste Aktion gemäß Planung.
+
+Die Schaltfläche **Run Batch** ist derzeit bewusst noch als Platzhalter markiert.
 
 ## 9. Ergebnisartekfakt
 Das Ergebnisartefakt dieses Projekts besteht aus einem konsistenten und reproduzierbaren Satz an Experimenten sowie deren Auswertung. Es dient dazu, die implementierten Algorithmen unter identischen Bedingungen vergleichbar zu machen und ihre Eigenschaften systematisch zu analysieren. Dabei stehen sowohl die Qualität der gefundenen Lösungen als auch der Rechenaufwand und – im Fall von Reinforcement Learning – das Lernverhalten im Fokus.
@@ -312,7 +327,14 @@ Das Ergebnisartefakt dieses Projekts besteht aus einem konsistenten und reproduz
 
 Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des zulässigen Anfahrwinkels.
 
-Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der die resultierende Trajektorie des Schiffes beschreibt. Diese Trajektorie ist eine Folge diskreter Zustände
+Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der heute sowohl den **besten resultierenden Pfad** als auch den **Run-Trace** für die Visualisierung enthält. Dazu gehören insbesondere:
+- `path` und `actions` als kompatible Standardfelder,
+- `best_path` und `best_actions` für die explizite Best-Path-Darstellung,
+- `run_trace` für die schrittweise UI-Visualisierung,
+- Zeit- und Trainingsmetriken,
+- Reward-Verlauf und Erfolgsrate beim Q-Learning.
+
+Die Trajektorie ist eine Folge diskreter Zustände
 π = (s₀, s₁, …, s_T)
 und wird zusammen mit den zugehörigen Aktionen gespeichert. Aus ihr wird die Gesamtzeit berechnet:
 
@@ -320,9 +342,7 @@ J(π) = Σ t(s_t, a_t)
 
 Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der Anfahrbedingung überprüfen zu können.
 
-Neben diesen pfadbezogenen Größen wird auch der Rechenaufwand protokolliert. Bei den graphbasierten Verfahren und beim Potentialfeld entspricht dies der Planungszeit bis zur Lösung. Beim Q-Learning werden sowohl die Trainingsdauer als auch die Ausführungszeit der gelernten Policy erfasst. Darüber hinaus werden für das Reinforcement Learning der Reward-Verlauf über die Episoden hinweg sowie die resultierende Politik gespeichert, um Aussagen über das Konvergenzverhalten treffen zu können.
-
-Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet werden können.
+Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet und in der UI getrennt als **Run**, **Best path** und **Compare** genutzt werden können.
 
 ### 9.2 Analyse und Vergleich
 

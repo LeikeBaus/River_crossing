@@ -163,6 +163,18 @@ class TestPolicyHelpers(unittest.TestCase):
         self.assertFalse(result.found)
         self.assertGreaterEqual(len(result.path), 2)
 
+    def test_rollout_breaks_out_of_simple_loops(self) -> None:
+        env = _make_env(nx=5, ny=3, start=State(0, 1), goal=State(4, 1))
+        cost_fn = _make_cost()
+        policy = {
+            State(0, 1): (1, 0),
+            State(1, 1): (-1, 0),
+        }
+
+        result = rollout_policy(env, cost_fn, policy, max_steps=50)
+        self.assertFalse(result.found)
+        self.assertLess(len(result.path), 10)
+
 
 class TestConfigIntegration(unittest.TestCase):
     def test_q_learning_from_config(self) -> None:

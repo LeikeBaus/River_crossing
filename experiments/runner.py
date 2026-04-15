@@ -39,6 +39,9 @@ class ExperimentRunRecord:
     nodes_expanded: int
     path: list[list[int]] = field(default_factory=list)
     actions: list[list[int]] = field(default_factory=list)
+    best_path: list[list[int]] = field(default_factory=list)
+    best_actions: list[list[int]] = field(default_factory=list)
+    run_trace: list[dict[str, Any]] = field(default_factory=list)
     reward_history: list[float] = field(default_factory=list)
     success_rate: float | None = None
 
@@ -132,19 +135,19 @@ def _run_single_experiment(
         t0 = time.perf_counter()
         plan = dijkstra(env, cost_fn)
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "a_star":
         t0 = time.perf_counter()
         plan = astar_from_config(env, cost_fn, algo_cfg["a_star"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "weighted_a_star":
         t0 = time.perf_counter()
         plan = weighted_astar_from_config(env, cost_fn, algo_cfg["weighted_a_star"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "dynamic_programming":
         dp_cfg = algo_cfg["dynamic_programming"]
@@ -159,13 +162,13 @@ def _run_single_experiment(
         path, actions = extract_path(env, vi.policy)
         plan_time = time.perf_counter() - t0
         plan = _plan_result_from_path(env, cost_fn, path, actions, nodes_expanded=vi.iterations)
-        return _record_from_plan(env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "apf":
         t0 = time.perf_counter()
         plan = apf_from_config(env, cost_fn, algo_cfg["apf"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "q_learning":
         t0 = time.perf_counter()
@@ -183,6 +186,7 @@ def _run_single_experiment(
         inference_time = time.perf_counter() - t1
 
         return _record_from_plan(
+            env,
             env_name,
             algorithm,
             seed,
@@ -220,6 +224,7 @@ def _plan_result_from_path(
 
 
 def _record_from_plan(
+    env: RiverEnvironment,
     environment_name: str,
     algorithm: str,
     seed: int,
@@ -232,6 +237,7 @@ def _record_from_plan(
 ) -> ExperimentRunRecord:
     path = [[state.i, state.j] for state in plan.path]
     actions = [[action[0], action[1]] for action in plan.actions]
+    run_trace = _build_run_trace(env, plan.path, plan.actions)
     angle_valid = bool(plan.found and plan.path and plan.actions)
     total_time = plan_time + training_time + inference_time
     total_cost = None if not plan.found else float(plan.total_cost)
@@ -252,6 +258,45 @@ def _record_from_plan(
         nodes_expanded=int(plan.nodes_expanded),
         path=path,
         actions=actions,
+        best_path=path,
+        best_actions=actions,
+        run_trace=run_trace,
         reward_history=reward_history or [],
         success_rate=success_rate,
     )
+
+
+def _build_run_trace(
+    env: RiverEnvironment,
+    path: list[Any],
+    actions: list[Any],
+) -> list[dict[str, Any]]:
+    """Build a per-step decision trace for the UI Run view."""
+    trace: list[dict[str, Any]] = []
+
+    for index, state in enumerate(path):
+        best_action = actions[index] if index < len(actions) else None
+        step: dict[str, Any] = {
+            "step": index,
+            "state": [state.i, state.j],
+            "best_action": None if best_action is None else [best_action[0], best_action[1]],
+            "valid_actions": [],
+            "invalid_actions": [],
+        }
+
+        valid_actions = set(env.valid_actions(state))
+        for action in env.actions:
+            encoded = [int(action[0]), int(action[1])]
+            if action not in valid_actions:
+                step["invalid_actions"].append(encoded)
+                continue
+
+            next_state = env.transition(state, action)
+            if next_state == env.goal and not env.is_goal(next_state, action):
+                step["invalid_actions"].append(encoded)
+            elif action != best_action:
+                step["valid_actions"].append(encoded)
+
+        trace.append(step)
+
+    return trace

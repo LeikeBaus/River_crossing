@@ -113,6 +113,24 @@ class TestAPFPlanner(unittest.TestCase):
         self.assertTrue(result.found)
         self.assertTrue(env.is_goal(result.path[-1], result.actions[-1]))
 
+    def test_finds_path_with_docking_constraint_in_baseline_case(self) -> None:
+        env = _make_env(
+            nx=40,
+            ny=20,
+            start=State(2, 10),
+            goal=State(37, 10),
+            angle_min=30.0,
+            angle_max=60.0,
+            flow_vi=1.0,
+            flow_vj=0.0,
+        )
+        cost_fn = _make_cost(alpha=1.0, beta=0.0, flow_vi=1.0)
+        result = apf_plan(env, cost_fn, k_att=1.0, lambda_flow=0.2)
+
+        self.assertTrue(result.found)
+        self.assertEqual(result.path[-1], env.goal)
+        self.assertTrue(env.is_goal(result.path[-1], result.actions[-1]))
+
     def test_total_cost_matches_path_sum(self) -> None:
         env = _make_env(nx=7, ny=5, start=State(0, 2), goal=State(6, 2), angle_min=0.0, angle_max=90.0)
         cost_fn = _make_cost(alpha=1.0, beta=0.0)

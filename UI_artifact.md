@@ -1,118 +1,123 @@
 # UI Artifact - River Crossing (PyQt6)
 
 ## 1. Purpose
-Define a concrete PyQt6 rewrite plan for the project UI. This artifact serves as implementation target, review checklist, and acceptance baseline.
+This document describes the current UI artifact that is now implemented in the project and serves as the documentation baseline for the desktop interface.
 
-## 2. Fixed Decisions
-These decisions are final and should not be revisited during M1-M3:
+## 2. Core UI Decisions
+The interface currently uses:
 
-1. Rendering backend: QGraphicsView + QPainter.
-2. Concurrency model: QThread worker objects with Qt signals.
-3. Style system: native platform style (no global custom theme in M1).
-4. Comparison mode default: tab-based views.
-5. Export priority: PNG first (SVG optional later).
+1. QGraphicsView and QPainter for grid rendering.
+2. QThread worker objects with Qt signals for background UI tasks.
+3. Native platform styling.
+4. Tab-based navigation for the three main analysis modes.
+5. PNG export as the primary output format.
 
-## 3. Product Goals
-- Replace text UI with a desktop UI.
-- Visualize river grid, flow vectors, start/goal, and trajectories.
-- Support single-run and multi-algorithm comparison workflows.
-- Keep domain logic independent from UI classes.
+## 3. Current User-Facing Features
+The application supports:
 
-## 4. Main User Workflows
-1. Open app and load config context.
-2. Choose environment, algorithm, seed.
-3. Trigger single run and inspect trajectory + metrics.
-4. Switch to compare tab and compare algorithms for same scenario.
-5. Export current visualization to PNG.
+- loading stored experiment results,
+- selecting environment, algorithm, and seed,
+- animating trajectories,
+- resetting the animation to frame 1,
+- comparing best paths across algorithms,
+- inspecting run creation step by step,
+- interactively changing the displayed flow vector.
 
-## 5. Target Layout
-## 5.1 Main Window
+## 4. Current Layout
+### 4.1 Main Window
 - Top toolbar actions:
-  - Load Config
+  - Load Results
   - Run Single
   - Run Batch
   - Compare
   - Export PNG
   - Export Report
-- Left control panel:
-  - Environment selector
-  - Algorithm selector
-  - Seed selector
-  - Show flow checkbox
-  - Show labels checkbox
-  - Animation controls (play, pause, step, speed)
-- Center panel:
-  - Tab widget with:
-    - Single View tab (single canvas)
-    - Compare View tab (multi-canvas comparison grid)
-- Right metrics panel:
-  - total_cost
-  - delta_j
-  - steps
-  - plan_time
-  - training_time
-  - inference_time
-  - angle_valid
-- Bottom dock:
-  - status log (append-only)
 
-## 6. Milestone Status
-M1 delivered the shell and wiring.
+### 4.2 Left Control Panel
+- Environment selector
+- Algorithm selector
+- Seed selector
+- Animation speed control
+- Show flow checkbox
+- Show labels checkbox
+- Play button
+- Pause button
+- Step button
+- Reset button
 
-M2 delivered:
-1. Single-run rendering from stored run records.
-2. Metrics panel population.
-3. Results loading and PNG export.
+### 4.3 Flow Controls
+The flow section contains:
 
-M3 delivers:
-1. Compare tab with multiple algorithm canvases.
-2. Play, pause, and step controls.
-3. Synchronized frame-based animation in Single and Compare tabs.
-4. Redraw behavior when display toggles change.
+- a QDial for choosing direction,
+- a horizontal slider for flow strength,
+- three synchronized float line edits for:
+  - x-direction,
+  - y-direction,
+  - strength.
 
-Still deferred after M3:
-1. Running simulations directly from UI buttons.
-2. Export report implementation.
-3. Advanced compare interactions such as per-canvas selection/focus.
+All controls update each other bidirectionally.
 
-## 7. Architecture
-- ui/visualization.py:
-  - PyQt6 widgets, single-run rendering, compare grid, and animation flow.
-  - Main window orchestration and placeholder interactions.
-- main.py:
-  - Command-line entrypoint with `ui` command to launch desktop app.
-- experiments/, algorithms/, core/:
-  - unchanged domain/services consumed by later UI stages.
+### 4.4 Center Tabs
+The center panel contains three tabs:
 
-Separation rule:
-- UI never mutates core algorithm code.
-- Data exchange through stable dict-based run records and config objects.
+1. Run
+   - shows the progressive creation of a path,
+   - highlights action categories with color.
 
-## 8. Concurrency Contract (QThread)
-- Long-running tasks execute in worker QObject moved to QThread.
-- Worker emits:
-  - progress(int)
-  - message(str)
-  - result(dict)
-  - error(str)
-  - finished()
-- Main window updates controls and logs only from the UI thread.
+2. Best path
+   - shows the final chosen path for one selected run,
+   - supports animation over the best trajectory.
 
-## 9. Error Handling Policy
-- Invalid file/config paths: non-blocking dialog + status log message.
-- Missing run selections: clear warning in status area.
-- Worker exceptions: catch in worker, emit error signal, keep app alive.
+3. Compare
+   - shows best-path comparison across algorithms for the same scenario.
 
-## 10. Test Strategy
-Current focus through M3:
-1. CLI contract for launching UI command.
-2. Pure helper logic in UI module (formatting, path coercion, animation frames, run selection).
-3. Scaffold contract checks for PyQt6 UI entrypoints.
+### 4.5 Metrics Panel
+The right side displays:
 
-## 11. Definition of Done
-M3 is done when:
-1. Running `python main.py ui` opens the native-style app shell.
-2. Single tab renders one selected run with metrics.
-3. Compare tab renders multiple algorithms for one scenario.
-4. Play, pause, and step animate both tabs.
-5. Updated tests and docs reflect the PyQt6 direction.
+- total_cost
+- delta_j
+- steps
+- plan_time
+- training_time
+- inference_time
+- angle_valid
+
+### 4.6 Status Area
+A bottom dock logs load events, worker messages, warnings, and UI status changes.
+
+## 5. Run View Semantics
+The Run tab uses color-coded overlays to show stepwise decision quality:
+
+- red = invalid action,
+- yellow = valid but not selected,
+- green = selected best action.
+
+This view is intended to make the search or rollout process interpretable rather than only showing the final result.
+
+## 6. Current Limitations
+The following items remain intentionally incomplete:
+
+1. Run Batch is still a placeholder in the UI.
+2. Export Report is still a placeholder.
+3. The Run view currently derives its visualization from stored run traces and best-action information rather than launching a live algorithm debugger.
+
+## 7. Data Contract with Analysis Files
+The UI now relies on a richer run record format that distinguishes between:
+
+- best_path and best_actions,
+- path and actions for compatibility,
+- run_trace for stepwise rendering,
+- timing and quality metrics,
+- reward history and success metrics for RL.
+
+This separation enables the three-tab design without overloading a single generic path field.
+
+## 8. Acceptance State
+The current UI artifact is considered achieved when:
+
+1. the application launches from the command line,
+2. the three tabs are visible as Run, Best path, and Compare,
+3. Reset returns the visualization to frame 1,
+4. flow controls stay synchronized,
+5. Compare uses best-path data,
+6. the Run tab shows action coloring.

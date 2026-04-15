@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDial,
     QDockWidget,
     QDoubleSpinBox,
     QFileDialog,
@@ -19,11 +21,13 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QScrollArea,
+    QSlider,
     QStatusBar,
     QTabWidget,
     QToolBar,
@@ -32,6 +36,9 @@ from PyQt6.QtWidgets import (
 )
 
 from core.config_loader import load_env_config, load_experiment_config
+from core.environment.actions import ACTIONS, Action
+from core.environment.environment import RiverEnvironment
+from core.environment.grid import State
 from experiments.runner import load_experiment_results
 
 
@@ -43,6 +50,7 @@ class UISelectionState:
     show_flow: bool
     show_labels: bool
     speed: float
+    flow_vector: tuple[float, float] = (1.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,7 @@ class RenderRunData:
     title: str
     run: dict[str, Any]
     path: list[tuple[int, int]]
+    actions: list[tuple[int, int]]
 
 
 def parse_seed_options(values: list[int] | None) -> list[str]:
@@ -67,6 +76,56 @@ def coerce_path(raw_path: Any) -> list[tuple[int, int]]:
         if isinstance(item, (list, tuple)) and len(item) == 2:
             result.append((int(item[0]), int(item[1])))
     return result
+
+
+def coerce_actions(raw_actions: Any) -> list[tuple[int, int]]:
+    if not isinstance(raw_actions, list):
+        return []
+
+    result: list[tuple[int, int]] = []
+    for item in raw_actions:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            result.append((int(item[0]), int(item[1])))
+    return result
+
+
+def angle_strength_to_vector(angle_deg: float, strength: float) -> tuple[float, float]:
+    radians = math.radians(float(angle_deg))
+    magnitude = max(0.0, float(strength))
+    return (magnitude * math.cos(radians), magnitude * math.sin(radians))
+
+
+def vector_to_angle_strength(vi: float, vj: float) -> tuple[float, float]:
+    strength = math.hypot(float(vi), float(vj))
+    angle = math.degrees(math.atan2(float(vj), float(vi)))
+    if angle < 0.0:
+        angle += 360.0
+    return (angle, strength)
+
+
+def build_action_overlay(
+    env: RiverEnvironment,
+    state: State,
+    best_action: Action | None,
+) -> dict[str, list[Action]]:
+    valid_actions = set(env.valid_actions(state))
+    overlay: dict[str, list[Action]] = {"best": [], "valid": [], "invalid": []}
+
+    for action in ACTIONS:
+        next_is_valid_goal = True
+        if action in valid_actions:
+            next_state = env.transition(state, action)
+            if next_state == env.goal and not env.is_goal(next_state, action):
+                next_is_valid_goal = False
+
+        if action == best_action and action in valid_actions and next_is_valid_goal:
+            overlay["best"].append(action)
+        elif action in valid_actions and next_is_valid_goal:
+            overlay["valid"].append(action)
+        else:
+            overlay["invalid"].append(action)
+
+    return overlay
 
 
 def visible_path_for_frame(path: list[tuple[int, int]], frame_index: int) -> list[tuple[int, int]]:
@@ -145,7 +204,8 @@ def build_render_run_data(runs: list[dict[str, Any]]) -> list[RenderRunData]:
                 f"seed={run.get('seed')}"
             ),
             run=run,
-            path=coerce_path(run.get("path", [])),
+            path=coerce_path(run.get("best_path", run.get("path", []))),
+            actions=coerce_actions(run.get("best_actions", run.get("actions", []))),
         )
         for run in runs
     ]
@@ -251,6 +311,8 @@ class GridCanvas(QGraphicsView):
         show_flow: bool,
         show_labels: bool,
         title_suffix: str,
+        overlay_state: tuple[int, int] | None = None,
+        action_overlay: dict[str, list[Action]] | None = None,
     ) -> None:
         self._scene.clear()
         border_pen = QPen(QColor("#D0D7DE"))
@@ -264,6 +326,9 @@ class GridCanvas(QGraphicsView):
 
         if show_flow:
             self._draw_flow(flow_vector)
+
+        if overlay_state is not None and action_overlay is not None:
+            self._draw_action_overlay(overlay_state, action_overlay)
 
         self._draw_path(path, show_labels)
         self._draw_marker(start, QColor("#1F77B4"), "S")
@@ -297,6 +362,34 @@ class GridCanvas(QGraphicsView):
         text.setDefaultTextColor(QColor("#FFFFFF"))
         text.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         text.setPos(x + self._cell_size * 0.28, y + self._cell_size * 0.12)
+
+    def _fill_cell(self, cell: tuple[int, int], color: QColor) -> None:
+        i, j = cell
+        if not (0 <= i < self._nx and 0 <= j < self._ny):
+            return
+        x, y = self._cell_origin(i, j)
+        fill = QColor(color)
+        fill.setAlpha(90)
+        pen = QPen(fill.darker(120))
+        pen.setCosmetic(True)
+        self._scene.addRect(x + 1, y + 1, self._cell_size - 2, self._cell_size - 2, pen, QBrush(fill))
+
+    def _draw_action_overlay(
+        self,
+        state: tuple[int, int],
+        action_overlay: dict[str, list[Action]],
+    ) -> None:
+        si, sj = state
+        palette = {
+            "invalid": QColor("#DC2626"),
+            "valid": QColor("#EAB308"),
+            "best": QColor("#16A34A"),
+        }
+
+        for key in ("invalid", "valid", "best"):
+            for action in action_overlay.get(key, []):
+                cell = (si + int(action[0]), sj + int(action[1]))
+                self._fill_cell(cell, palette[key])
 
     def _draw_active_position(self, path: list[tuple[int, int]], start: tuple[int, int]) -> None:
         cell = path[-1] if path else start
@@ -428,10 +521,13 @@ class ControlPanel(QWidget):
     play_clicked = pyqtSignal()
     pause_clicked = pyqtSignal()
     step_clicked = pyqtSignal()
+    reset_clicked = pyqtSignal()
     redraw_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
+        self._updating_flow_controls = False
+
         self.environment_combo = QComboBox()
         self.environment_combo.addItems(["baseline"])
 
@@ -460,9 +556,25 @@ class ControlPanel(QWidget):
         self.speed.setValue(1.0)
         self.speed.setSuffix("x")
 
+        self.flow_direction_dial = QDial()
+        self.flow_direction_dial.setRange(0, 359)
+        self.flow_direction_dial.setWrapping(True)
+        self.flow_direction_dial.setNotchesVisible(True)
+
+        self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
+        self.flow_strength_slider.setRange(0, 500)
+        self.flow_strength_slider.setValue(100)
+
+        self.flow_x_edit = QLineEdit("1.000")
+        self.flow_y_edit = QLineEdit("0.000")
+        self.flow_strength_edit = QLineEdit("1.000")
+        for widget in (self.flow_x_edit, self.flow_y_edit, self.flow_strength_edit):
+            widget.setMaximumWidth(100)
+
         self.play_button = QPushButton("Play")
         self.pause_button = QPushButton("Pause")
         self.step_button = QPushButton("Step")
+        self.reset_button = QPushButton("Reset")
 
         self.run_single_button = QPushButton("Run Single")
         self.run_batch_button = QPushButton("Run Batch")
@@ -474,10 +586,17 @@ class ControlPanel(QWidget):
         self.play_button.clicked.connect(self.play_clicked.emit)
         self.pause_button.clicked.connect(self.pause_clicked.emit)
         self.step_button.clicked.connect(self.step_clicked.emit)
+        self.reset_button.clicked.connect(self.reset_clicked.emit)
 
-        self.show_flow.stateChanged.connect(self.redraw_requested.emit)
-        self.show_labels.stateChanged.connect(self.redraw_requested.emit)
-        self.speed.valueChanged.connect(self.redraw_requested.emit)
+        self.show_flow.stateChanged.connect(lambda _: self.redraw_requested.emit())
+        self.show_labels.stateChanged.connect(lambda _: self.redraw_requested.emit())
+        self.speed.valueChanged.connect(lambda _: self.redraw_requested.emit())
+
+        self.flow_direction_dial.valueChanged.connect(self._on_flow_direction_changed)
+        self.flow_strength_slider.valueChanged.connect(self._on_flow_strength_changed)
+        self.flow_x_edit.editingFinished.connect(self._on_vector_line_edits_changed)
+        self.flow_y_edit.editingFinished.connect(self._on_vector_line_edits_changed)
+        self.flow_strength_edit.editingFinished.connect(self._on_strength_line_edit_changed)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -486,16 +605,84 @@ class ControlPanel(QWidget):
         form.addRow("Seed", self.seed_combo)
         form.addRow("Animation speed", self.speed)
         layout.addLayout(form)
+
+        layout.addWidget(QLabel("Flow direction"))
+        layout.addWidget(self.flow_direction_dial)
+        layout.addWidget(QLabel("Flow strength"))
+        layout.addWidget(self.flow_strength_slider)
+
+        flow_values = QFormLayout()
+        flow_values.addRow("flow x", self.flow_x_edit)
+        flow_values.addRow("flow y", self.flow_y_edit)
+        flow_values.addRow("strength", self.flow_strength_edit)
+        layout.addLayout(flow_values)
+
         layout.addWidget(self.show_flow)
         layout.addWidget(self.show_labels)
         layout.addWidget(self.play_button)
         layout.addWidget(self.pause_button)
         layout.addWidget(self.step_button)
+        layout.addWidget(self.reset_button)
         layout.addSpacing(12)
         layout.addWidget(self.run_single_button)
         layout.addWidget(self.run_batch_button)
         layout.addWidget(self.compare_button)
         layout.addStretch(1)
+
+        self.set_flow_vector(1.0, 0.0)
+
+    def set_flow_vector(self, vi: float, vj: float) -> None:
+        self._updating_flow_controls = True
+        angle, strength = vector_to_angle_strength(vi, vj)
+        self.flow_direction_dial.setValue(int(round(angle)) % 360)
+        self.flow_strength_slider.setValue(int(round(strength * 100.0)))
+        self.flow_x_edit.setText(f"{float(vi):.3f}")
+        self.flow_y_edit.setText(f"{float(vj):.3f}")
+        self.flow_strength_edit.setText(f"{strength:.3f}")
+        self._updating_flow_controls = False
+
+    def flow_vector(self) -> tuple[float, float]:
+        try:
+            return (float(self.flow_x_edit.text()), float(self.flow_y_edit.text()))
+        except ValueError:
+            return (1.0, 0.0)
+
+    def _on_flow_direction_changed(self, value: int) -> None:
+        if self._updating_flow_controls:
+            return
+        strength = self.flow_strength_slider.value() / 100.0
+        vi, vj = angle_strength_to_vector(float(value), strength)
+        self.set_flow_vector(vi, vj)
+        self.redraw_requested.emit()
+
+    def _on_flow_strength_changed(self, value: int) -> None:
+        if self._updating_flow_controls:
+            return
+        vi, vj = angle_strength_to_vector(float(self.flow_direction_dial.value()), value / 100.0)
+        self.set_flow_vector(vi, vj)
+        self.redraw_requested.emit()
+
+    def _on_vector_line_edits_changed(self) -> None:
+        if self._updating_flow_controls:
+            return
+        try:
+            vi = float(self.flow_x_edit.text())
+            vj = float(self.flow_y_edit.text())
+        except ValueError:
+            return
+        self.set_flow_vector(vi, vj)
+        self.redraw_requested.emit()
+
+    def _on_strength_line_edit_changed(self) -> None:
+        if self._updating_flow_controls:
+            return
+        try:
+            strength = max(0.0, float(self.flow_strength_edit.text()))
+        except ValueError:
+            return
+        vi, vj = angle_strength_to_vector(float(self.flow_direction_dial.value()), strength)
+        self.set_flow_vector(vi, vj)
+        self.redraw_requested.emit()
 
     def selection_state(self) -> UISelectionState:
         return UISelectionState(
@@ -505,6 +692,7 @@ class ControlPanel(QWidget):
             show_flow=self.show_flow.isChecked(),
             show_labels=self.show_labels.isChecked(),
             speed=float(self.speed.value()),
+            flow_vector=self.flow_vector(),
         )
 
 
@@ -556,11 +744,13 @@ class RiverCrossingMainWindow(QMainWindow):
         self.control_panel = ControlPanel()
         self.metrics_panel = MetricsPanel()
 
-        self.single_canvas = GridCanvas("Single View")
+        self.run_canvas = GridCanvas("Run View")
+        self.single_canvas = GridCanvas("Best Path View")
         self.compare_view = CompareView()
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.single_canvas, "Single")
+        self.tabs.addTab(self.run_canvas, "Run")
+        self.tabs.addTab(self.single_canvas, "Best path")
         self.tabs.addTab(self.compare_view, "Compare")
         self.tabs.currentChanged.connect(lambda _: self._render_current_tab())
 
@@ -582,6 +772,7 @@ class RiverCrossingMainWindow(QMainWindow):
         self.control_panel.play_clicked.connect(self._start_animation)
         self.control_panel.pause_clicked.connect(self._pause_animation)
         self.control_panel.step_clicked.connect(self._step_animation)
+        self.control_panel.reset_clicked.connect(self._reset_animation)
         self.control_panel.redraw_requested.connect(self._handle_redraw_request)
 
         self._apply_env_to_views()
@@ -590,9 +781,12 @@ class RiverCrossingMainWindow(QMainWindow):
     def _apply_env_to_views(self) -> None:
         nx = int(self._env_cfg["grid"]["nx"])
         ny = int(self._env_cfg["grid"]["ny"])
+        self.run_canvas.set_grid_shape(nx, ny)
         self.single_canvas.set_grid_shape(nx, ny)
         self.compare_view.set_grid_shape(nx, ny)
         self._populate_control_options()
+        flow = self._env_cfg.get("flow", {}).get("vector", [1.0, 0.0])
+        self.control_panel.set_flow_vector(float(flow[0]), float(flow[1]))
         self._render_current_tab()
 
     def _populate_control_options(self) -> None:
@@ -687,6 +881,10 @@ class RiverCrossingMainWindow(QMainWindow):
         self._append_log(f"Exported PNG: {path}")
 
     def _run_worker(self, mode: str) -> None:
+        if mode == "batch":
+            self._append_log("Run Batch is still a placeholder in the UI.")
+            return
+
         if self._worker_thread is not None:
             self._append_log("A worker is already running.")
             return
@@ -724,33 +922,54 @@ class RiverCrossingMainWindow(QMainWindow):
             self._set_compare_runs(payload["runs"])
             return
 
+        self._append_log("Run Batch remains a placeholder.")
         self.metrics_panel.update_metrics({})
 
     def _set_single_run(self, run: dict[str, Any]) -> None:
         self._pause_animation(log_message=False)
         self._single_run = build_render_run_data([run])[0]
-        self._single_frame = len(self._single_run.path)
+        self._single_frame = 1 if self._single_run.path else 0
         self.tabs.setCurrentIndex(0)
-        self._render_single_frame()
+        self._render_current_tab()
 
     def _set_compare_runs(self, runs: list[dict[str, Any]]) -> None:
         self._pause_animation(log_message=False)
         self._compare_runs = build_render_run_data(runs)
         self.compare_view.set_runs(self._compare_runs)
         self._compare_frame = max_frame_count(self._compare_runs)
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(2)
         self._render_compare_frame()
 
     def _render_current_tab(self) -> None:
         if self.tabs.currentIndex() == 0:
+            self._render_run_frame()
+        elif self.tabs.currentIndex() == 1:
             self._render_single_frame()
         else:
             self._render_compare_frame()
 
     def _handle_redraw_request(self) -> None:
+        flow = self.control_panel.selection_state().flow_vector
+        self._env_cfg.setdefault("flow", {})["vector"] = [float(flow[0]), float(flow[1])]
         if self._animation_timer.isActive():
             self._restart_animation_timer()
         self._render_current_tab()
+
+    def _reset_animation(self) -> None:
+        self._pause_animation(log_message=False)
+        if self._single_run is not None:
+            self._single_frame = 1 if self._single_run.path else 0
+        if self._compare_runs:
+            self._compare_frame = 1
+        self._render_current_tab()
+        self._append_log("Reset to frame 1.")
+
+    def _current_environment(self) -> RiverEnvironment:
+        env_cfg = dict(self._env_cfg)
+        env_cfg["flow"] = dict(env_cfg.get("flow", {}))
+        flow = self.control_panel.selection_state().flow_vector
+        env_cfg["flow"]["vector"] = [float(flow[0]), float(flow[1])]
+        return RiverEnvironment.from_config(env_cfg)
 
     def _env_start(self) -> tuple[int, int]:
         return (int(self._env_cfg["start"][0]), int(self._env_cfg["start"][1]))
@@ -759,10 +978,53 @@ class RiverCrossingMainWindow(QMainWindow):
         return (int(self._env_cfg["goal"][0]), int(self._env_cfg["goal"][1]))
 
     def _env_flow(self) -> tuple[float, float]:
-        return (
-            float(self._env_cfg["flow"]["vector"][0]),
-            float(self._env_cfg["flow"]["vector"][1]),
+        flow = self.control_panel.selection_state().flow_vector
+        return (float(flow[0]), float(flow[1]))
+
+    def _render_run_frame(self) -> None:
+        start = self._env_start()
+        goal = self._env_goal()
+        flow = self._env_flow()
+        state = self.control_panel.selection_state()
+
+        if self._single_run is None:
+            self.run_canvas.draw_run(
+                start=start,
+                goal=goal,
+                path=[],
+                flow_vector=flow,
+                show_flow=state.show_flow,
+                show_labels=state.show_labels,
+                title_suffix="ready",
+            )
+            self.metrics_panel.update_metrics({})
+            return
+
+        visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
+        current_cell = visible_path[-1] if visible_path else start
+        best_action = None
+        next_action_index = max(0, len(visible_path) - 1)
+        if next_action_index < len(self._single_run.actions):
+            best_action = self._single_run.actions[next_action_index]
+
+        overlay = build_action_overlay(
+            self._current_environment(),
+            State(int(current_cell[0]), int(current_cell[1])),
+            best_action=best_action,
         )
+
+        self.run_canvas.draw_run(
+            start=start,
+            goal=goal,
+            path=visible_path,
+            flow_vector=flow,
+            show_flow=state.show_flow,
+            show_labels=state.show_labels,
+            title_suffix=f"{self._single_run.title} | run frame={len(visible_path)}/{len(self._single_run.path)}",
+            overlay_state=current_cell,
+            action_overlay=overlay,
+        )
+        self.metrics_panel.update_metrics(format_metrics(self._single_run.run, self._records))
 
     def _render_single_frame(self) -> None:
         start = self._env_start()
@@ -803,6 +1065,7 @@ class RiverCrossingMainWindow(QMainWindow):
 
         if not self._compare_runs:
             self.compare_view.set_runs([])
+            self.metrics_panel.update_metrics({})
             return
 
         self.compare_view.draw_runs(
@@ -821,7 +1084,7 @@ class RiverCrossingMainWindow(QMainWindow):
         self.metrics_panel.update_metrics(format_metrics(selected.run, self._records))
 
     def _active_total_frames(self) -> int:
-        if self.tabs.currentIndex() == 0:
+        if self.tabs.currentIndex() in {0, 1}:
             return 0 if self._single_run is None else len(self._single_run.path)
         return max_frame_count(self._compare_runs)
 
@@ -831,9 +1094,9 @@ class RiverCrossingMainWindow(QMainWindow):
             self._append_log("No rendered path available for animation.")
             return
 
-        if self.tabs.currentIndex() == 0 and self._single_frame >= total_frames:
+        if self.tabs.currentIndex() in {0, 1} and self._single_frame >= total_frames:
             self._single_frame = 0
-        if self.tabs.currentIndex() == 1 and self._compare_frame >= total_frames:
+        if self.tabs.currentIndex() == 2 and self._compare_frame >= total_frames:
             self._compare_frame = 0
 
         self._restart_animation_timer()
@@ -863,9 +1126,9 @@ class RiverCrossingMainWindow(QMainWindow):
             self._pause_animation(log_message=False)
             return
 
-        if self.tabs.currentIndex() == 0:
+        if self.tabs.currentIndex() in {0, 1}:
             self._single_frame = min(self._single_frame + 1, total_frames)
-            self._render_single_frame()
+            self._render_current_tab()
             at_end = self._single_frame >= total_frames
         else:
             self._compare_frame = min(self._compare_frame + 1, total_frames)

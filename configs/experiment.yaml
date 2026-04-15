@@ -12,6 +12,8 @@ algorithms:
   - apf
   - q_learning
 
+q_learning_episodes: 1200
+
 metrics:
   - total_time
   - path_length

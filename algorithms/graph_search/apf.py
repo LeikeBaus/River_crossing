@@ -26,10 +26,16 @@ class APFResult(PlanResult):
     local_minimum_detected: bool = False
 
 
-def attractive_potential(state: State, goal: State, k_att: float) -> float:
-    """Return the attractive potential ``0.5 * k_att * ||s - s_goal||^2``."""
-    di = state.i - goal.i
-    dj = state.j - goal.j
+def attractive_potential(
+    state: State,
+    goal: State,
+    k_att: float,
+    target: State | None = None,
+) -> float:
+    """Return the attractive potential ``0.5 * k_att * ||s - s_target||^2``."""
+    target_state = goal if target is None else target
+    di = state.i - target_state.i
+    dj = state.j - target_state.j
     return 0.5 * k_att * (di * di + dj * dj)
 
 
@@ -39,14 +45,57 @@ def flow_potential(env: RiverEnvironment, state: State, lambda_flow: float) -> f
     return -lambda_flow * (state.i * vi + state.j * vj)
 
 
+def _valid_goal_predecessors(env: RiverEnvironment) -> list[State]:
+    """Return in-grid states from which the goal can be reached validly in one step."""
+    predecessors: list[State] = []
+    for action in env.actions:
+        candidate = State(env.goal.i - action[0], env.goal.j - action[1])
+        if not env.grid.contains(candidate):
+            continue
+        if env.transition(candidate, action) == env.goal and env.is_goal(env.goal, action):
+            predecessors.append(candidate)
+    return list(dict.fromkeys(predecessors))
+
+
+def _guidance_target(env: RiverEnvironment, state: State) -> State:
+    """Choose a docking-aware subgoal that guides APF into a valid approach corridor."""
+    predecessors = _valid_goal_predecessors(env)
+    if not predecessors or state in predecessors:
+        return env.goal
+
+    return min(
+        predecessors,
+        key=lambda item: (
+            (item.i - state.i) ** 2 + (item.j - state.j) ** 2,
+            abs(item.j - env.goal.j),
+            item.i,
+            item.j,
+        ),
+    )
+
+
+def _docking_distance_penalty(env: RiverEnvironment, state: State) -> float:
+    """Penalize states that are still far away from a valid final docking predecessor."""
+    if state == env.goal:
+        return 0.0
+
+    predecessors = _valid_goal_predecessors(env)
+    if not predecessors:
+        return 0.0
+
+    best_sq_distance = min((state.i - item.i) ** 2 + (state.j - item.j) ** 2 for item in predecessors)
+    return 0.05 * float(best_sq_distance)
+
+
 def total_potential(
     env: RiverEnvironment,
     state: State,
     k_att: float,
     lambda_flow: float,
+    target: State | None = None,
 ) -> float:
     """Return the total potential ``Phi_att + Phi_flow`` at *state*."""
-    return attractive_potential(state, env.goal, k_att) + flow_potential(env, state, lambda_flow)
+    return attractive_potential(state, env.goal, k_att, target=target) + flow_potential(env, state, lambda_flow)
 
 
 def potential_gradient(
@@ -54,6 +103,7 @@ def potential_gradient(
     state: State,
     k_att: float,
     lambda_flow: float,
+    target: State | None = None,
 ) -> tuple[float, float]:
     """Return the discrete APF gradient under the current constant-flow model.
 
@@ -63,9 +113,10 @@ def potential_gradient(
 
     which is exact for spatially constant flow fields.
     """
+    target_state = env.goal if target is None else target
     vi, vj = env.flow_at(state)
-    grad_i = k_att * (state.i - env.goal.i) - lambda_flow * vi
-    grad_j = k_att * (state.j - env.goal.j) - lambda_flow * vj
+    grad_i = k_att * (state.i - target_state.i) - lambda_flow * vi
+    grad_j = k_att * (state.j - target_state.j) - lambda_flow * vj
     return (grad_i, grad_j)
 
 
@@ -81,17 +132,23 @@ def select_apf_action(
     Ties are broken by lower next-state potential and then lexicographically.
     Invalid arrivals at the goal are excluded.
     """
-    gradient = potential_gradient(env, state, k_att, lambda_flow)
+    target = _guidance_target(env, state)
+    gradient = potential_gradient(env, state, k_att, lambda_flow, target=target)
     candidates: list[tuple[float, float, Action]] = []
 
     for action in env.valid_actions(state):
         next_state = env.transition(state, action)
-        if next_state == env.goal and not env.is_goal(next_state, action):
+        if next_state == env.goal:
+            if env.is_goal(next_state, action):
+                return action
             continue
 
         directional_derivative = action[0] * gradient[0] + action[1] * gradient[1]
-        next_potential = total_potential(env, next_state, k_att, lambda_flow)
-        candidates.append((directional_derivative, next_potential, action))
+        next_potential = total_potential(env, next_state, k_att, lambda_flow, target=target)
+        docking_penalty = _docking_distance_penalty(env, next_state)
+        candidates.append(
+            (directional_derivative + docking_penalty, next_potential + docking_penalty, action)
+        )
 
     if not candidates:
         return None

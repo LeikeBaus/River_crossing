@@ -4,6 +4,8 @@ import unittest
 
 from ui.visualization import (
     UISelectionState,
+    angle_strength_to_vector,
+    build_action_overlay,
     build_render_run_data,
     coerce_path,
     compute_delta_j,
@@ -11,11 +13,37 @@ from ui.visualization import (
     format_metrics,
     max_frame_count,
     parse_seed_options,
+    vector_to_angle_strength,
     visible_path_for_frame,
 )
+from core.environment.environment import DockingConfig, RiverEnvironment
+from core.dynamics.flow import ConstantFlow
+from core.environment.grid import Grid, State
 
 
 class VisualizationTests(unittest.TestCase):
+    def test_flow_vector_round_trip_is_consistent(self) -> None:
+        angle, strength = vector_to_angle_strength(1.0, 1.0)
+        vx, vy = angle_strength_to_vector(angle, strength)
+
+        self.assertAlmostEqual(vx, 1.0, places=4)
+        self.assertAlmostEqual(vy, 1.0, places=4)
+
+    def test_build_action_overlay_marks_best_valid_and_invalid(self) -> None:
+        env = RiverEnvironment(
+            grid=Grid(5, 5),
+            flow=ConstantFlow(vi=0.0, vj=0.0),
+            start=State(0, 2),
+            goal=State(4, 2),
+            docking=DockingConfig(normal=(0.0, 1.0), angle_min_deg=30.0, angle_max_deg=60.0),
+        )
+
+        overlay = build_action_overlay(env, State(0, 2), best_action=(1, -1))
+
+        self.assertIn((1, -1), overlay["best"])
+        self.assertIn((1, 0), overlay["valid"])
+        self.assertIn((-1, 0), overlay["invalid"])
+
     def test_parse_seed_options_uses_defaults_for_empty(self) -> None:
         self.assertEqual(parse_seed_options([]), ["1"])
 
