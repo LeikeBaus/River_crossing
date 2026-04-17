@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QObject, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QObject, QPointF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPolygonF, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -35,11 +35,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.config_loader import load_env_config, load_experiment_config
+from core.config_loader import load_algorithm_config, load_env_config, load_experiment_config
+from core.cost.cost_function import CostFunction
 from core.environment.actions import ACTIONS, Action
 from core.environment.environment import RiverEnvironment
 from core.environment.grid import State
-from experiments.runner import load_experiment_results
+from experiments.evaluator import evaluate_results
+from experiments.runner import load_experiment_results, run_all_experiments, run_single_experiment
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class UISelectionState:
     show_labels: bool
     speed: float
     flow_vector: tuple[float, float] = (1.0, 0.0)
+    impact: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,19 @@ def vector_to_angle_strength(vi: float, vj: float) -> tuple[float, float]:
     if angle < 0.0:
         angle += 360.0
     return (angle, strength)
+
+
+def dial_to_math_angle(dial_deg: float) -> float:
+    """Map dial value to vector angle so dial "up" points north.
+
+    QDial increases clockwise; math angles increase counterclockwise.
+    """
+    return (270.0 - float(dial_deg)) % 360.0
+
+
+def math_to_dial_angle(angle_deg: float) -> float:
+    """Inverse mapping for setting the dial from a vector."""
+    return (270.0 - float(angle_deg)) % 360.0
 
 
 def build_action_overlay(
@@ -236,25 +252,69 @@ class SimulationWorker(QObject):
     error = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, mode: str, records: list[dict[str, Any]], selection: UISelectionState) -> None:
+    def __init__(
+        self,
+        mode: str,
+        records: list[dict[str, Any]],
+        selection: UISelectionState,
+        config_dir: Path,
+        results_path: Path,
+    ) -> None:
         super().__init__()
         self.mode = mode
         self.records = records
         self.selection = selection
+        self.config_dir = config_dir
+        self.results_path = results_path
 
     def run(self) -> None:
         try:
             self.message.emit(f"Worker started in mode '{self.mode}'.")
             self.progress.emit(15)
 
-            if self.mode == "single":
+            if self.mode == "run_single_experiment":
+                self.message.emit("Running selected experiment...")
+                record = run_single_experiment(
+                    environment_name=self.selection.environment,
+                    algorithm=self.selection.algorithm,
+                    seed=self.selection.seed,
+                    config_dir=self.config_dir,
+                    flow_vector_override=self.selection.flow_vector,
+                    impact_override=self.selection.impact,
+                )
+                self.progress.emit(100)
+                self.result.emit({"mode": "run_single_experiment", "run": record.to_dict()})
+                return
+
+            if self.mode == "run_batch_experiment":
+                self.message.emit("Running experiment batch and evaluation...")
+                records = run_all_experiments(
+                    config_dir=self.config_dir,
+                    output_path=self.results_path,
+                    flow_vector_override=self.selection.flow_vector,
+                    impact_override=self.selection.impact,
+                )
+                summary_path = self.results_path.parent / "evaluation_summary.json"
+                evaluate_results(records, output_path=summary_path)
+                self.progress.emit(100)
+                self.result.emit(
+                    {
+                        "mode": "run_batch_experiment",
+                        "records": [record.to_dict() for record in records],
+                        "results_path": str(self.results_path),
+                        "summary_path": str(summary_path),
+                    }
+                )
+                return
+
+            if self.mode == "show_results":
                 run = find_single_run(self.records, self.selection)
                 if run is None:
                     raise ValueError(
                         "No run found for current selection. Load or generate matching results first."
                     )
                 self.progress.emit(100)
-                self.result.emit({"mode": "single", "run": run})
+                self.result.emit({"mode": "show_results", "run": run})
                 return
 
             if self.mode == "compare":
@@ -317,15 +377,21 @@ class GridCanvas(QGraphicsView):
         self._scene.clear()
         border_pen = QPen(QColor("#D0D7DE"))
         border_pen.setWidth(1)
-        fill_brush = QBrush(QColor("#F8F9FA"))
 
         for i in range(self._nx):
             for j in range(self._ny):
                 x, y = self._cell_origin(i, j)
-                self._scene.addRect(x, y, self._cell_size, self._cell_size, border_pen, fill_brush)
+                self._scene.addRect(
+                    x,
+                    y,
+                    self._cell_size,
+                    self._cell_size,
+                    border_pen,
+                    QBrush(self._base_tile_color(i, j, start, goal)),
+                )
 
         if show_flow:
-            self._draw_flow(flow_vector)
+            self._draw_flow(flow_vector, start, goal)
 
         if overlay_state is not None and action_overlay is not None:
             self._draw_action_overlay(overlay_state, action_overlay)
@@ -369,10 +435,27 @@ class GridCanvas(QGraphicsView):
             return
         x, y = self._cell_origin(i, j)
         fill = QColor(color)
-        fill.setAlpha(90)
+        fill.setAlpha(160)
         pen = QPen(fill.darker(120))
         pen.setCosmetic(True)
         self._scene.addRect(x + 1, y + 1, self._cell_size - 2, self._cell_size - 2, pen, QBrush(fill))
+
+    def _base_tile_color(
+        self,
+        i: int,
+        j: int,
+        start: tuple[int, int],
+        goal: tuple[int, int],
+    ) -> QColor:
+        if (i, j) == start or (i, j) == goal:
+            return QColor("#E2E8F0")
+        if i < start[0] or i > goal[0]:
+            # Low-saturation dark green for land.
+            land = QColor("#3F5A4E")
+            land.setAlpha(110)
+            return land
+        # Low-saturation light blue for water.
+        return QColor("#D6E6F2")
 
     def _draw_action_overlay(
         self,
@@ -402,6 +485,33 @@ class GridCanvas(QGraphicsView):
         pen.setCosmetic(True)
         self._scene.addRect(x + 1.5, y + 1.5, self._cell_size - 3, self._cell_size - 3, pen)
 
+    def _draw_arrow_head(
+        self,
+        ex: float,
+        ey: float,
+        vi: float,
+        vj: float,
+        size: float,
+        pen: QPen,
+    ) -> None:
+        """Draw a small arrow head at (ex, ey) pointing in direction (vi, vj)."""
+        magnitude = math.hypot(vi, vj)
+        if magnitude == 0.0:
+            return
+
+        di = vi / magnitude
+        dj = -vj / magnitude
+        perp_i = dj
+        perp_j = di
+
+        p1 = QPointF(ex, ey)
+        p2 = QPointF(ex - di * size - perp_i * size / 2, ey - dj * size + perp_j * size / 2)
+        p3 = QPointF(ex - di * size + perp_i * size / 2, ey - dj * size - perp_j * size / 2)
+
+        arrow = QPolygonF([p1, p2, p3])
+        brush = QBrush(pen.color())
+        self._scene.addPolygon(arrow, pen, brush)
+
     def _draw_path(self, path: list[tuple[int, int]], show_labels: bool) -> None:
         if len(path) < 2:
             return
@@ -423,7 +533,12 @@ class GridCanvas(QGraphicsView):
                 label.setFont(QFont("Segoe UI", 7))
                 label.setPos(x0 + 2, y0 + 2)
 
-    def _draw_flow(self, flow_vector: tuple[float, float]) -> None:
+    def _draw_flow(
+        self,
+        flow_vector: tuple[float, float],
+        start: tuple[int, int],
+        goal: tuple[int, int],
+    ) -> None:
         vi, vj = flow_vector
         if abs(vi) + abs(vj) == 0.0:
             return
@@ -434,12 +549,16 @@ class GridCanvas(QGraphicsView):
         flow_pen.setCosmetic(True)
 
         scale = self._cell_size * 0.35
+        arrow_size = 3.0
         for i in range(0, self._nx, step):
+            if i < start[0] or i > goal[0]:
+                continue
             for j in range(0, self._ny, step):
                 cx, cy = self._cell_center(i, j)
                 ex = cx + vi * scale
                 ey = cy - vj * scale
                 self._scene.addLine(cx, cy, ex, ey, flow_pen)
+                self._draw_arrow_head(ex, ey, vi, vj, arrow_size, flow_pen)
 
     def resizeEvent(self, event: Any) -> None:  # noqa: ANN401
         super().resizeEvent(event)
@@ -515,16 +634,14 @@ class CompareView(QWidget):
 
 
 class ControlPanel(QWidget):
-    run_single_clicked = pyqtSignal()
-    run_batch_clicked = pyqtSignal()
-    compare_clicked = pyqtSignal()
     play_clicked = pyqtSignal()
     pause_clicked = pyqtSignal()
     step_clicked = pyqtSignal()
+    step_reverse_clicked = pyqtSignal()
     reset_clicked = pyqtSignal()
     redraw_requested = pyqtSignal()
 
-    def __init__(self) -> None:
+    def __init__(self, initial_impact: float = 0.0) -> None:
         super().__init__()
         self._updating_flow_controls = False
 
@@ -568,24 +685,25 @@ class ControlPanel(QWidget):
         self.flow_x_edit = QLineEdit("1.000")
         self.flow_y_edit = QLineEdit("0.000")
         self.flow_strength_edit = QLineEdit("1.000")
-        for widget in (self.flow_x_edit, self.flow_y_edit, self.flow_strength_edit):
+        self.flow_impact_spin = QDoubleSpinBox()
+        self.flow_impact_spin.setRange(0.0, 100.0)
+        self.flow_impact_spin.setSingleStep(1.0)
+        self.flow_impact_spin.setDecimals(0)
+        self.flow_impact_spin.setSuffix("%")
+        self.flow_impact_spin.setValue(max(0.0, min(100.0, float(initial_impact) * 100.0)))
+        for widget in (self.flow_x_edit, self.flow_y_edit, self.flow_strength_edit, self.flow_impact_spin):
             widget.setMaximumWidth(100)
 
         self.play_button = QPushButton("Play")
         self.pause_button = QPushButton("Pause")
-        self.step_button = QPushButton("Step")
+        self.step_button = QPushButton("Step forward")
+        self.step_reverse_button = QPushButton("Step reverse")
         self.reset_button = QPushButton("Reset")
 
-        self.run_single_button = QPushButton("Run Single")
-        self.run_batch_button = QPushButton("Run Batch")
-        self.compare_button = QPushButton("Compare")
-
-        self.run_single_button.clicked.connect(self.run_single_clicked.emit)
-        self.run_batch_button.clicked.connect(self.run_batch_clicked.emit)
-        self.compare_button.clicked.connect(self.compare_clicked.emit)
         self.play_button.clicked.connect(self.play_clicked.emit)
         self.pause_button.clicked.connect(self.pause_clicked.emit)
         self.step_button.clicked.connect(self.step_clicked.emit)
+        self.step_reverse_button.clicked.connect(self.step_reverse_clicked.emit)
         self.reset_button.clicked.connect(self.reset_clicked.emit)
 
         self.show_flow.stateChanged.connect(lambda _: self.redraw_requested.emit())
@@ -597,6 +715,7 @@ class ControlPanel(QWidget):
         self.flow_x_edit.editingFinished.connect(self._on_vector_line_edits_changed)
         self.flow_y_edit.editingFinished.connect(self._on_vector_line_edits_changed)
         self.flow_strength_edit.editingFinished.connect(self._on_strength_line_edit_changed)
+        self.flow_impact_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -615,6 +734,7 @@ class ControlPanel(QWidget):
         flow_values.addRow("flow x", self.flow_x_edit)
         flow_values.addRow("flow y", self.flow_y_edit)
         flow_values.addRow("strength", self.flow_strength_edit)
+        flow_values.addRow("impact", self.flow_impact_spin)
         layout.addLayout(flow_values)
 
         layout.addWidget(self.show_flow)
@@ -622,11 +742,8 @@ class ControlPanel(QWidget):
         layout.addWidget(self.play_button)
         layout.addWidget(self.pause_button)
         layout.addWidget(self.step_button)
+        layout.addWidget(self.step_reverse_button)
         layout.addWidget(self.reset_button)
-        layout.addSpacing(12)
-        layout.addWidget(self.run_single_button)
-        layout.addWidget(self.run_batch_button)
-        layout.addWidget(self.compare_button)
         layout.addStretch(1)
 
         self.set_flow_vector(1.0, 0.0)
@@ -634,7 +751,7 @@ class ControlPanel(QWidget):
     def set_flow_vector(self, vi: float, vj: float) -> None:
         self._updating_flow_controls = True
         angle, strength = vector_to_angle_strength(vi, vj)
-        self.flow_direction_dial.setValue(int(round(angle)) % 360)
+        self.flow_direction_dial.setValue(int(round(math_to_dial_angle(angle))) % 360)
         self.flow_strength_slider.setValue(int(round(strength * 100.0)))
         self.flow_x_edit.setText(f"{float(vi):.3f}")
         self.flow_y_edit.setText(f"{float(vj):.3f}")
@@ -651,14 +768,17 @@ class ControlPanel(QWidget):
         if self._updating_flow_controls:
             return
         strength = self.flow_strength_slider.value() / 100.0
-        vi, vj = angle_strength_to_vector(float(value), strength)
+        vi, vj = angle_strength_to_vector(dial_to_math_angle(float(value)), strength)
         self.set_flow_vector(vi, vj)
         self.redraw_requested.emit()
 
     def _on_flow_strength_changed(self, value: int) -> None:
         if self._updating_flow_controls:
             return
-        vi, vj = angle_strength_to_vector(float(self.flow_direction_dial.value()), value / 100.0)
+        vi, vj = angle_strength_to_vector(
+            dial_to_math_angle(float(self.flow_direction_dial.value())),
+            value / 100.0,
+        )
         self.set_flow_vector(vi, vj)
         self.redraw_requested.emit()
 
@@ -680,7 +800,10 @@ class ControlPanel(QWidget):
             strength = max(0.0, float(self.flow_strength_edit.text()))
         except ValueError:
             return
-        vi, vj = angle_strength_to_vector(float(self.flow_direction_dial.value()), strength)
+        vi, vj = angle_strength_to_vector(
+            dial_to_math_angle(float(self.flow_direction_dial.value())),
+            strength,
+        )
         self.set_flow_vector(vi, vj)
         self.redraw_requested.emit()
 
@@ -693,6 +816,7 @@ class ControlPanel(QWidget):
             show_labels=self.show_labels.isChecked(),
             speed=float(self.speed.value()),
             flow_vector=self.flow_vector(),
+            impact=float(self.flow_impact_spin.value()) / 100.0,
         )
 
 
@@ -700,6 +824,7 @@ class MetricsPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.labels: dict[str, QLabel] = {}
+        self._neighborhood_cells: dict[tuple[int, int], QLabel] = {}
 
         layout = QFormLayout(self)
         for key in [
@@ -715,9 +840,107 @@ class MetricsPanel(QWidget):
             self.labels[key] = label
             layout.addRow(key, label)
 
+        neighborhood = QWidget()
+        grid = QGridLayout(neighborhood)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(2)
+        grid.setVerticalSpacing(2)
+
+        for row in range(3):
+            for col in range(3):
+                di = col - 1
+                dj = 1 - row
+                cell = QLabel("")
+                cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                cell.setMinimumSize(76, 52)
+                cell.setStyleSheet("background-color: #F8F9FA; border: 1px solid #D0D7DE; font-size: 9px;")
+                self._neighborhood_cells[(di, dj)] = cell
+                grid.addWidget(cell, row, col)
+
+        spacer = QLabel("")
+        spacer.setFixedHeight(24)
+        layout.addRow(spacer)
+
+        local_label = QLabel("Local 3x3")
+        local_label.setStyleSheet("font-weight: 600;")
+        layout.addRow(local_label)
+        layout.addRow(neighborhood)
+
     def update_metrics(self, metrics: dict[str, Any]) -> None:
         for key, label in self.labels.items():
             label.setText(str(metrics.get(key, "-")))
+
+    def update_neighborhood(
+        self,
+        env: RiverEnvironment | None,
+        state: State | None,
+        action_overlay: dict[str, list[Action]] | None,
+        cost_fn: CostFunction | None,
+    ) -> None:
+        if env is None or state is None:
+            for cell in self._neighborhood_cells.values():
+                cell.setText("")
+                cell.setStyleSheet("background-color: #F8F9FA; border: 1px solid #D0D7DE; font-size: 9px;")
+            return
+
+        overlay = action_overlay or {"best": [], "valid": [], "invalid": []}
+        best_actions = set(overlay.get("best", []))
+        valid_actions = set(overlay.get("valid", []))
+        invalid_actions = set(overlay.get("invalid", []))
+
+        for (di, dj), cell in self._neighborhood_cells.items():
+            target = State(state.i + di, state.j + dj)
+            if di == 0 and dj == 0:
+                cell.setText("Current\nposition")
+                cell.setStyleSheet("background-color: #E2E8F0; border: 1px solid #94A3B8; font-size: 9px; font-weight: 600;")
+                continue
+
+            action = (di, dj)
+            if not env.grid.contains(target):
+                cell.setText("")
+                cell.setStyleSheet("background-color: #D1D5DB; border: 1px solid #9CA3AF; font-size: 9px;")
+                continue
+
+            if env.is_land(target):
+                cell.setText("")
+                cell.setStyleSheet("background-color: rgba(63, 90, 78, 110); border: 1px solid #4B5F55; font-size: 9px;")
+                continue
+
+            background = "#D6E6F2"
+            border = "#8EA6B8"
+            text = ""
+
+            if action in best_actions:
+                background = "#16A34A"
+                border = "#166534"
+            elif action in valid_actions:
+                background = "#EAB308"
+                border = "#A16207"
+            elif action in invalid_actions:
+                background = "#DC2626"
+                border = "#991B1B"
+
+            if (action in best_actions or action in valid_actions) and cost_fn is not None:
+                try:
+                    time_cost = cost_fn.time(state, action)
+                    energy_cost = cost_fn.energy(state, action)
+                    total_cost = cost_fn(state, action)
+                    text = (
+                        f"Time {time_cost:.2f}\n"
+                        f"Energy {energy_cost:.2f}\n"
+                        f"Total {total_cost:.2f}"
+                    )
+                except Exception:  # noqa: BLE001
+                    text = ""
+
+            cell.setText(text)
+            cell.setStyleSheet(
+                "background-color: "
+                + background
+                + "; border: 1px solid "
+                + border
+                + "; font-size: 9px;"
+            )
 
 
 class RiverCrossingMainWindow(QMainWindow):
@@ -736,12 +959,14 @@ class RiverCrossingMainWindow(QMainWindow):
         self._compare_frame = 0
 
         self._env_cfg = load_env_config("configs/env.yaml")
+        self._algo_cfg = load_algorithm_config("configs/algorithm.yaml")
         self._exp_cfg = load_experiment_config("configs/experiment.yaml")
 
         self._animation_timer = QTimer(self)
         self._animation_timer.timeout.connect(self._advance_animation)
 
-        self.control_panel = ControlPanel()
+        default_impact = float(self._algo_cfg.get("common", {}).get("beta", 0.0))
+        self.control_panel = ControlPanel(initial_impact=default_impact)
         self.metrics_panel = MetricsPanel()
 
         self.run_canvas = GridCanvas("Run View")
@@ -766,12 +991,13 @@ class RiverCrossingMainWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage("Ready")
 
-        self.control_panel.run_single_clicked.connect(lambda: self._run_worker("single"))
-        self.control_panel.run_batch_clicked.connect(lambda: self._run_worker("batch"))
-        self.control_panel.compare_clicked.connect(lambda: self._run_worker("compare"))
+        self.control_panel.environment_combo.currentIndexChanged.connect(self._on_selection_changed)
+        self.control_panel.algorithm_combo.currentIndexChanged.connect(self._on_selection_changed)
+        self.control_panel.seed_combo.currentIndexChanged.connect(self._on_selection_changed)
         self.control_panel.play_clicked.connect(self._start_animation)
         self.control_panel.pause_clicked.connect(self._pause_animation)
         self.control_panel.step_clicked.connect(self._step_animation)
+        self.control_panel.step_reverse_clicked.connect(self._step_animation_reverse)
         self.control_panel.reset_clicked.connect(self._reset_animation)
         self.control_panel.redraw_requested.connect(self._handle_redraw_request)
 
@@ -809,13 +1035,17 @@ class RiverCrossingMainWindow(QMainWindow):
         load_action.triggered.connect(self._pick_results_file)
         toolbar.addAction(load_action)
 
-        run_single_action = QAction("Run Single", self)
-        run_single_action.triggered.connect(lambda: self._run_worker("single"))
+        run_single_action = QAction("Run Single Experiment", self)
+        run_single_action.triggered.connect(lambda: self._run_worker("run_single_experiment"))
         toolbar.addAction(run_single_action)
 
-        run_batch_action = QAction("Run Batch", self)
-        run_batch_action.triggered.connect(lambda: self._run_worker("batch"))
+        run_batch_action = QAction("Run Experiment Batch", self)
+        run_batch_action.triggered.connect(lambda: self._run_worker("run_batch_experiment"))
         toolbar.addAction(run_batch_action)
+
+        show_results_action = QAction("Show Results", self)
+        show_results_action.triggered.connect(lambda: self._run_worker("show_results"))
+        toolbar.addAction(show_results_action)
 
         compare_action = QAction("Compare", self)
         compare_action.triggered.connect(lambda: self._run_worker("compare"))
@@ -881,14 +1111,10 @@ class RiverCrossingMainWindow(QMainWindow):
         self._append_log(f"Exported PNG: {path}")
 
     def _run_worker(self, mode: str) -> None:
-        if mode == "batch":
-            self._append_log("Run Batch is still a placeholder in the UI.")
-            return
-
         if self._worker_thread is not None:
             self._append_log("A worker is already running.")
             return
-        if not self._records and mode in {"single", "compare"}:
+        if not self._records and mode in {"show_results", "compare"}:
             self._append_log("No results loaded. Generate results first or load a JSON file.")
             return
 
@@ -898,7 +1124,13 @@ class RiverCrossingMainWindow(QMainWindow):
         )
 
         self._worker_thread = QThread(self)
-        self._worker = SimulationWorker(mode, self._records, selection)
+        self._worker = SimulationWorker(
+            mode,
+            list(self._records),
+            selection,
+            config_dir=Path("configs"),
+            results_path=self._results_path,
+        )
         self._worker.moveToThread(self._worker_thread)
 
         self._worker_thread.started.connect(self._worker.run)
@@ -915,22 +1147,59 @@ class RiverCrossingMainWindow(QMainWindow):
         self._append_log(f"Worker result ready for mode={payload.get('mode')}")
         mode = str(payload.get("mode", ""))
 
-        if mode == "single":
-            self._set_single_run(payload["run"])
+        if mode == "run_single_experiment":
+            run = dict(payload["run"])
+            self._upsert_record(run)
+            self._set_single_run(run)
+            self._append_log("Single experiment finished and rendered.")
+            return
+
+        if mode == "run_batch_experiment":
+            self._records = [dict(item) for item in payload.get("records", [])]
+            self._append_log(f"Batch finished: {len(self._records)} runs saved to {payload.get('results_path')}")
+            self._append_log(f"Evaluation summary saved to {payload.get('summary_path')}")
+            self.metrics_panel.update_metrics({})
+            return
+
+        if mode == "show_results":
+            self._set_single_run(payload["run"], switch_to_run_tab=False)
             return
         if mode == "compare":
             self._set_compare_runs(payload["runs"])
             return
 
-        self._append_log("Run Batch remains a placeholder.")
+        self._append_log(f"Unhandled worker mode: {mode}")
         self.metrics_panel.update_metrics({})
 
-    def _set_single_run(self, run: dict[str, Any]) -> None:
+    def _upsert_record(self, run: dict[str, Any]) -> None:
+        key = (
+            str(run.get("environment_name")),
+            str(run.get("algorithm")),
+            int(run.get("seed", -1)),
+        )
+        for index, existing in enumerate(self._records):
+            existing_key = (
+                str(existing.get("environment_name")),
+                str(existing.get("algorithm")),
+                int(existing.get("seed", -2)),
+            )
+            if existing_key == key:
+                self._records[index] = run
+                return
+        self._records.append(run)
+
+    def _set_single_run(self, run: dict[str, Any], switch_to_run_tab: bool = True) -> None:
         self._pause_animation(log_message=False)
         self._single_run = build_render_run_data([run])[0]
         self._single_frame = 1 if self._single_run.path else 0
-        self.tabs.setCurrentIndex(0)
+        if switch_to_run_tab:
+            self.tabs.setCurrentIndex(0)
         self._render_current_tab()
+
+    def _on_selection_changed(self, _: int) -> None:
+        if not self._records or self._worker_thread is not None:
+            return
+        self._run_worker("show_results")
 
     def _set_compare_runs(self, runs: list[dict[str, Any]]) -> None:
         self._pause_animation(log_message=False)
@@ -971,6 +1240,13 @@ class RiverCrossingMainWindow(QMainWindow):
         env_cfg["flow"]["vector"] = [float(flow[0]), float(flow[1])]
         return RiverEnvironment.from_config(env_cfg)
 
+    def _current_cost_function(self, env: RiverEnvironment) -> CostFunction:
+        selection = self.control_panel.selection_state()
+        effective_algo_cfg = dict(self._algo_cfg)
+        effective_algo_cfg["common"] = dict(effective_algo_cfg.get("common", {}))
+        effective_algo_cfg["common"]["beta"] = float(selection.impact)
+        return CostFunction.from_config(effective_algo_cfg, env.flow)
+
     def _env_start(self) -> tuple[int, int]:
         return (int(self._env_cfg["start"][0]), int(self._env_cfg["start"][1]))
 
@@ -988,6 +1264,9 @@ class RiverCrossingMainWindow(QMainWindow):
         state = self.control_panel.selection_state()
 
         if self._single_run is None:
+            env = self._current_environment()
+            overlay = build_action_overlay(env, State(start[0], start[1]), best_action=None)
+            cost_fn = self._current_cost_function(env)
             self.run_canvas.draw_run(
                 start=start,
                 goal=goal,
@@ -998,8 +1277,10 @@ class RiverCrossingMainWindow(QMainWindow):
                 title_suffix="ready",
             )
             self.metrics_panel.update_metrics({})
+            self.metrics_panel.update_neighborhood(env, State(start[0], start[1]), overlay, cost_fn)
             return
 
+        env = self._current_environment()
         visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
         current_cell = visible_path[-1] if visible_path else start
         best_action = None
@@ -1008,7 +1289,7 @@ class RiverCrossingMainWindow(QMainWindow):
             best_action = self._single_run.actions[next_action_index]
 
         overlay = build_action_overlay(
-            self._current_environment(),
+            env,
             State(int(current_cell[0]), int(current_cell[1])),
             best_action=best_action,
         )
@@ -1025,6 +1306,12 @@ class RiverCrossingMainWindow(QMainWindow):
             action_overlay=overlay,
         )
         self.metrics_panel.update_metrics(format_metrics(self._single_run.run, self._records))
+        self.metrics_panel.update_neighborhood(
+            env,
+            State(int(current_cell[0]), int(current_cell[1])),
+            overlay,
+            self._current_cost_function(env),
+        )
 
     def _render_single_frame(self) -> None:
         start = self._env_start()
@@ -1033,6 +1320,8 @@ class RiverCrossingMainWindow(QMainWindow):
         state = self.control_panel.selection_state()
 
         if self._single_run is None:
+            env = self._current_environment()
+            overlay = build_action_overlay(env, State(start[0], start[1]), best_action=None)
             self.single_canvas.draw_run(
                 start=start,
                 goal=goal,
@@ -1043,9 +1332,26 @@ class RiverCrossingMainWindow(QMainWindow):
                 title_suffix="ready",
             )
             self.metrics_panel.update_metrics({})
+            self.metrics_panel.update_neighborhood(
+                env,
+                State(start[0], start[1]),
+                overlay,
+                self._current_cost_function(env),
+            )
             return
 
         visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
+        env = self._current_environment()
+        current_cell = visible_path[-1] if visible_path else start
+        best_action = None
+        next_action_index = max(0, len(visible_path) - 1)
+        if next_action_index < len(self._single_run.actions):
+            best_action = self._single_run.actions[next_action_index]
+        overlay = build_action_overlay(
+            env,
+            State(int(current_cell[0]), int(current_cell[1])),
+            best_action=best_action,
+        )
         self.single_canvas.draw_run(
             start=start,
             goal=goal,
@@ -1056,6 +1362,12 @@ class RiverCrossingMainWindow(QMainWindow):
             title_suffix=f"{self._single_run.title} | frame={len(visible_path)}/{len(self._single_run.path)}",
         )
         self.metrics_panel.update_metrics(format_metrics(self._single_run.run, self._records))
+        self.metrics_panel.update_neighborhood(
+            env,
+            State(int(current_cell[0]), int(current_cell[1])),
+            overlay,
+            self._current_cost_function(env),
+        )
 
     def _render_compare_frame(self) -> None:
         start = self._env_start()
@@ -1066,6 +1378,7 @@ class RiverCrossingMainWindow(QMainWindow):
         if not self._compare_runs:
             self.compare_view.set_runs([])
             self.metrics_panel.update_metrics({})
+            self.metrics_panel.update_neighborhood(None, None, None, None)
             return
 
         self.compare_view.draw_runs(
@@ -1082,6 +1395,24 @@ class RiverCrossingMainWindow(QMainWindow):
             self._compare_runs[0],
         )
         self.metrics_panel.update_metrics(format_metrics(selected.run, self._records))
+        env = self._current_environment()
+        visible_path = visible_path_for_frame(selected.path, self._compare_frame)
+        current_cell = visible_path[-1] if visible_path else start
+        best_action = None
+        next_action_index = max(0, len(visible_path) - 1)
+        if next_action_index < len(selected.actions):
+            best_action = selected.actions[next_action_index]
+        overlay = build_action_overlay(
+            env,
+            State(int(current_cell[0]), int(current_cell[1])),
+            best_action=best_action,
+        )
+        self.metrics_panel.update_neighborhood(
+            env,
+            State(int(current_cell[0]), int(current_cell[1])),
+            overlay,
+            self._current_cost_function(env),
+        )
 
     def _active_total_frames(self) -> int:
         if self.tabs.currentIndex() in {0, 1}:
@@ -1114,6 +1445,17 @@ class RiverCrossingMainWindow(QMainWindow):
             self._append_log("No rendered path available for stepping.")
             return
         self._advance_animation(step_only=True)
+
+    def _step_animation_reverse(self) -> None:
+        total_frames = self._active_total_frames()
+        if total_frames <= 0:
+            self._append_log("No rendered path available for stepping.")
+            return
+        if self.tabs.currentIndex() in {0, 1}:
+            self._single_frame = max(0, self._single_frame - 1)
+        else:
+            self._compare_frame = max(0, self._compare_frame - 1)
+        self._render_current_tab()
 
     def _restart_animation_timer(self) -> None:
         speed = max(0.1, self.control_panel.selection_state().speed)

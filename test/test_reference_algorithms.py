@@ -164,9 +164,8 @@ class TestDijkstraOptimality(unittest.TestCase):
 
     def test_known_minimum_on_tiny_grid(self) -> None:
         # 3×3 grid, start=(0,1), goal=(2,1).
-        # Valid actions: (1,1) or (-1,1) → last step must go NE or NW.
-        # Shortest valid path: (0,1)→(1,2)→(2,1)  cost=√2+√2=2√2
-        #                  or  (0,1)→(1,0)→(2,1)  cost=√2+√2=2√2
+        # Goal is valid only with a diagonal final move.
+        # Shortest valid path: (0,1)→(1,0)→(2,1), cost=2√2
         env = _make_env(nx=3, ny=3, start=State(0, 1), goal=State(2, 1))
         cost_fn = _make_cost(alpha=1.0, beta=0.0)
         result = dijkstra(env, cost_fn)

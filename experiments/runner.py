@@ -53,6 +53,8 @@ def run_all_experiments(
     config_dir: str | Path = "configs",
     output_path: str | Path | None = None,
     rl_episodes: int | None = None,
+    flow_vector_override: tuple[float, float] | None = None,
+    impact_override: float | None = None,
 ) -> list[ExperimentRunRecord]:
     """Run the configured batch of experiments and optionally save raw results.
 
@@ -71,11 +73,16 @@ def run_all_experiments(
 
     for env_entry in exp_cfg["environments"]:
         env_name, env_cfg = _resolve_environment_config(config_dir, env_entry, default_env_cfg)
+        if flow_vector_override is not None:
+            env_cfg = dict(env_cfg)
+            env_cfg["flow"] = dict(env_cfg.get("flow", {}))
+            env_cfg["flow"]["vector"] = [float(flow_vector_override[0]), float(flow_vector_override[1])]
 
         for algorithm in exp_cfg["algorithms"]:
             for seed in exp_cfg["seeds"]:
                 env = RiverEnvironment.from_config(env_cfg)
-                cost_fn = CostFunction.from_config(algo_cfg, env.flow)
+                effective_algo_cfg = _algo_config_with_impact(algo_cfg, impact_override)
+                cost_fn = CostFunction.from_config(effective_algo_cfg, env.flow)
                 record = _run_single_experiment(
                     env=env,
                     env_name=env_name,
@@ -91,6 +98,55 @@ def run_all_experiments(
         save_experiment_results(output_path, results)
 
     return results
+
+
+def run_single_experiment(
+    environment_name: str,
+    algorithm: str,
+    seed: int,
+    config_dir: str | Path = "configs",
+    rl_episodes: int | None = None,
+    flow_vector_override: tuple[float, float] | None = None,
+    impact_override: float | None = None,
+) -> ExperimentRunRecord:
+    """Run one configured experiment for a selected environment/algorithm/seed."""
+    config_dir = Path(config_dir)
+    algo_cfg = load_algorithm_config(config_dir / "algorithm.yaml")
+    exp_cfg = load_experiment_config(config_dir / "experiment.yaml")
+    default_env_cfg = load_env_config(config_dir / "env.yaml")
+
+    if rl_episodes is None:
+        rl_episodes = int(exp_cfg.get("q_learning_episodes", exp_cfg.get("episodes", 200)))
+
+    env_entry = next(
+        (
+            item
+            for item in exp_cfg["environments"]
+            if str(item.get("name", "baseline")) == str(environment_name)
+        ),
+        None,
+    )
+    if env_entry is None:
+        raise ValueError(f"Unknown environment: {environment_name!r}")
+
+    env_name, env_cfg = _resolve_environment_config(config_dir, env_entry, default_env_cfg)
+    if flow_vector_override is not None:
+        env_cfg = dict(env_cfg)
+        env_cfg["flow"] = dict(env_cfg.get("flow", {}))
+        env_cfg["flow"]["vector"] = [float(flow_vector_override[0]), float(flow_vector_override[1])]
+    env = RiverEnvironment.from_config(env_cfg)
+    effective_algo_cfg = _algo_config_with_impact(algo_cfg, impact_override)
+    cost_fn = CostFunction.from_config(effective_algo_cfg, env.flow)
+
+    return _run_single_experiment(
+        env=env,
+        env_name=env_name,
+        algorithm=algorithm,
+        seed=int(seed),
+        cost_fn=cost_fn,
+        algo_cfg=algo_cfg,
+        rl_episodes=rl_episodes,
+    )
 
 
 def save_experiment_results(
@@ -120,6 +176,19 @@ def _resolve_environment_config(
     if env_path is None:
         return env_name, default_env_cfg
     return env_name, load_env_config(config_dir.parent / str(env_path))
+
+
+def _algo_config_with_impact(
+    algo_cfg: dict[str, Any],
+    impact_override: float | None,
+) -> dict[str, Any]:
+    if impact_override is None:
+        return algo_cfg
+
+    effective = dict(algo_cfg)
+    effective["common"] = dict(effective.get("common", {}))
+    effective["common"]["beta"] = float(impact_override)
+    return effective
 
 
 def _run_single_experiment(

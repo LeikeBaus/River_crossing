@@ -65,6 +65,8 @@ class RiverEnvironment:
             raise ValueError(f"Goal {goal} lies outside the grid {grid}.")
         if start == goal:
             raise ValueError("Start and goal must be different states.")
+        if start.i >= goal.i:
+            raise ValueError("Start must be left of goal (start.i < goal.i).")
 
         self.grid = grid
         self.flow = flow
@@ -114,8 +116,12 @@ class RiverEnvironment:
         return ACTIONS
 
     def valid_actions(self, state: State) -> tuple[Action, ...]:
-        """Return only actions that keep the vessel inside the grid."""
-        return tuple(a for a in self.actions if is_action_valid(state, a, self.grid))
+        """Return valid actions that stay in-bounds and in the water corridor."""
+        actions = tuple(a for a in self.actions if is_action_valid(state, a, self.grid))
+        actions = tuple(a for a in actions if not self.is_land(apply_action(state, a, self.grid)))
+        if state == self.start:
+            return tuple(a for a in actions if self._approach_angle_valid(a))
+        return actions
 
     def transition(self, state: State, action: Action) -> State:
         """Apply *action* to *state* and return the next state.
@@ -127,7 +133,12 @@ class RiverEnvironment:
         ValueError
             If the action would leave the grid.
         """
-        return apply_action(state, action, self.grid)
+        if state == self.start and not self._approach_angle_valid(action):
+            raise ValueError(f"Action {action} from {state} is not a valid diagonal start departure.")
+        next_state = apply_action(state, action, self.grid)
+        if self.is_land(next_state):
+            raise ValueError(f"Action {action} from {state} enters land at {next_state}.")
+        return next_state
 
     def flow_at(self, state: State) -> FlowVector:
         """Return the flow velocity vector at *state*."""
@@ -138,17 +149,23 @@ class RiverEnvironment:
     # ------------------------------------------------------------------
 
     def is_goal(self, state: State, last_action: Action) -> bool:
-        """Return True if *state* is the goal reached with a valid approach angle.
+        """Return True if *state* is the goal reached with a valid final move.
 
-        A state is a valid terminal state only when:
-
-        1. ``state == self.goal``, **and**
-        2. the angle between *last_action* and the docking normal satisfies
-           ``angle_min_deg ≤ θ ≤ angle_max_deg``.
+        Goal arrival is valid only via diagonal actions. The docking angle
+        configuration is retained for compatibility but no longer constrains
+        orientation relative to a berth normal.
         """
         if state != self.goal:
             return False
         return self._approach_angle_valid(last_action)
+
+    def is_land(self, state: State) -> bool:
+        """Return True if *state* lies outside the water corridor.
+
+        All columns strictly left of the start or strictly right of the goal are
+        land.
+        """
+        return state.i < self.start.i or state.i > self.goal.i
 
     def approach_angle_deg(self, action: Action) -> float | None:
         """Return the approach angle in degrees for *action*, or None if the action is the zero vector."""
@@ -169,10 +186,7 @@ class RiverEnvironment:
     # ------------------------------------------------------------------
 
     def _approach_angle_valid(self, action: Action) -> bool:
-        theta = self.approach_angle_deg(action)
-        if theta is None:
-            return False
-        return self.docking.angle_min_deg <= theta <= self.docking.angle_max_deg
+        return abs(int(action[0])) == 1 and abs(int(action[1])) == 1
 
     def __repr__(self) -> str:
         return (

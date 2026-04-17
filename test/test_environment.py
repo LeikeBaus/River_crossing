@@ -204,7 +204,7 @@ class TestMakeFlow(unittest.TestCase):
 
 
 class TestApproachAngle(unittest.TestCase):
-    """Test the approach-angle check with a docking normal of (0, 1)."""
+    """Test diagonal-only final-move validity."""
 
     def setUp(self) -> None:
         grid = Grid(40, 20)
@@ -217,13 +217,13 @@ class TestApproachAngle(unittest.TestCase):
         self.env = RiverEnvironment(grid, flow, State(2, 10), State(37, 10), docking)
 
     def test_diagonal_ne_valid(self) -> None:
-        # (1, 1) → θ = 45° relative to (0,1)
+        # Any diagonal entry into the goal is valid.
         theta = self.env.approach_angle_deg((1, 1))
         self.assertAlmostEqual(theta, 45.0, places=10)
         self.assertTrue(self.env._approach_angle_valid((1, 1)))
 
     def test_diagonal_nw_valid(self) -> None:
-        # (-1, 1) → θ = 45°
+        # Orientation-independent diagonal validity.
         theta = self.env.approach_angle_deg((-1, 1))
         self.assertAlmostEqual(theta, 45.0, places=10)
         self.assertTrue(self.env._approach_angle_valid((-1, 1)))
@@ -278,6 +278,12 @@ class TestRiverEnvironment(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._make_env(start=State(5, 5), goal=State(5, 5))
 
+    def test_rejects_start_not_left_of_goal(self) -> None:
+        with self.assertRaises(ValueError):
+            self._make_env(start=State(10, 5), goal=State(10, 6))
+        with self.assertRaises(ValueError):
+            self._make_env(start=State(11, 5), goal=State(10, 6))
+
     def test_transition_moves_ship(self) -> None:
         env = self._make_env()
         next_state = env.transition(State(2, 10), (1, 1))
@@ -291,7 +297,7 @@ class TestRiverEnvironment(unittest.TestCase):
 
     def test_valid_actions_excludes_out_of_grid_moves(self) -> None:
         env = self._make_env()
-        corner = State(0, 0)
+        corner = State(2, 0)
         valid = set(env.valid_actions(corner))
         self.assertNotIn((-1, 0), valid)
         self.assertNotIn((0, -1), valid)
@@ -300,14 +306,52 @@ class TestRiverEnvironment(unittest.TestCase):
         self.assertIn((0, 1), valid)
         self.assertIn((1, 1), valid)
 
+    def test_valid_actions_at_start_require_diagonal_departure(self) -> None:
+        env = self._make_env(start=State(2, 10))
+        valid = set(env.valid_actions(env.start))
+
+        self.assertIn((1, 1), valid)
+        self.assertIn((1, -1), valid)
+        self.assertNotIn((1, 0), valid)
+        self.assertNotIn((0, 1), valid)
+        self.assertNotIn((0, -1), valid)
+        self.assertNotIn((-1, 0), valid)  # left side is land
+
+    def test_valid_actions_non_start_do_not_use_angle_filter(self) -> None:
+        env = self._make_env(start=State(2, 10))
+        valid = set(env.valid_actions(State(3, 10)))
+
+        self.assertIn((1, 0), valid)
+        self.assertIn((0, 1), valid)
+        self.assertIn((1, 1), valid)
+
+    def test_land_cells_are_invalid_targets(self) -> None:
+        env = self._make_env(start=State(2, 10), goal=State(37, 10))
+        self.assertTrue(env.is_land(State(1, 10)))
+        self.assertFalse(env.is_land(State(2, 10)))
+        self.assertFalse(env.is_land(State(37, 10)))
+        self.assertTrue(env.is_land(State(38, 10)))
+
+    def test_transition_to_land_raises(self) -> None:
+        env = self._make_env(start=State(2, 10), goal=State(37, 10))
+        with self.assertRaises(ValueError):
+            env.transition(State(2, 10), (-1, 0))
+
+    def test_transition_non_diagonal_from_start_raises(self) -> None:
+        env = self._make_env(start=State(2, 10), goal=State(37, 10))
+        with self.assertRaises(ValueError):
+            env.transition(env.start, (1, 0))
+
     def test_is_goal_requires_correct_position_and_angle(self) -> None:
         env = self._make_env()
         goal = State(37, 10)
-        # Valid: at goal, valid angle
+        # Valid: at goal, any diagonal move.
         self.assertTrue(env.is_goal(goal, (1, 1)))
+        self.assertTrue(env.is_goal(goal, (1, -1)))
+        self.assertTrue(env.is_goal(goal, (-1, -1)))
         # Invalid: wrong position
         self.assertFalse(env.is_goal(State(36, 10), (1, 1)))
-        # Invalid: at goal but wrong angle
+        # Invalid: at goal but non-diagonal move.
         self.assertFalse(env.is_goal(goal, (0, 1)))
         self.assertFalse(env.is_goal(goal, (1, 0)))
 

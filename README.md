@@ -6,7 +6,9 @@ Ziel dieses Projekts ist die Untersuchung und der Vergleich verschiedener Pfadpl
 
 Das Szenario orientiert sich an der realen Fährverbindung zwischen zwei leicht versetzten Anlegestellen. Das Schiff startet an einem Punkt A und muss einen Zielpunkt B am gegenüberliegenden Ufer erreichen. Aufgrund der Lage der Anlegestellen ist eine direkte frontale Anfahrt nicht möglich. Stattdessen muss das Ziel in einem Winkelbereich von 30° bis 60° relativ zur Uferlinie angefahren werden.
 
-Optimiert wird ausschließlich die Überquerungszeit.
+In der aktuell implementierten Diskretisierung wird diese Bedingung als **diagonale Anfahrt** modelliert: Das Ziel ist nur dann gültig erreicht, wenn der letzte Schritt diagonal erfolgt. Dieselbe Einschränkung gilt symmetrisch auch für die Abfahrt vom Start, die ebenfalls nur diagonal erfolgen darf.
+
+Optimiert wird eine gewichtete Kostenfunktion aus Überquerungszeit und strömungsabhängigem Energieaufwand. In der Standardkonfiguration dominiert die Zeitkomponente; in der UI kann der Einfluss der Strömungskosten zusätzlich über den Parameter **Impact** verändert werden.
 
 ## 2. Mathematische Problemformulierung
 
@@ -82,21 +84,15 @@ Gesucht ist ein optimaler Pfad
 
 π* = argmin_π J(π)
 
-### 2.5 Randbedindung: Anfahrtwinkel
+### 2.5 Randbedingung: Diagonale Start- und Zielbewegung
 
-Das Ziel darf nur erreicht werden, wenn der letzte Bewegungsvektor a_T einen Winkel θ im Bereich
+Das Ziel darf nur erreicht werden, wenn der letzte Bewegungsvektor diagonal ist. Zulässig sind also nur die vier diagonalen Aktionen
 
-30° ≤ θ ≤ 60°
+{ (1,1), (1,-1), (-1,-1), (-1,1) }.
 
-relativ zur Uferlinie bzw. Zielorientierung erfüllt.
+Analog dazu darf auch der erste Schritt vom Start nur diagonal erfolgen.
 
-Formal:
-
-θ = arccos( ⟨a_T, n⟩ / (||a_T|| · ||n||) )
-
-mit n als Normalenvektor der Anlegestelle.
-
-Zustände, die diese Bedingung nicht erfüllen, gelten nicht als gültige Zielzustände.
+Zusätzlich ist die befahrbare Wasserfläche als Korridor zwischen Start- und Zielspalte modelliert. Zustände links vom Start oder rechts vom Ziel gelten als Land und dürfen nicht betreten werden.
 
 ## 3. Zielsetzung
 
@@ -306,26 +302,28 @@ Die aktuelle PyQt6-Oberfläche bietet drei klar getrennte Ansichten:
 
 Zusätzlich umfasst die UI:
 - Gitterstruktur,
-- Strömungsvektoren,
+- Strömungsvektoren mit Pfeildarstellung,
 - Start- und Zielpunkt,
-- Animation mit Play, Pause, Step und Reset,
+- Animation mit Play, Pause, Step forward, Step reverse und Reset,
 - Flow-Steuerung über einen QDial für die Richtung,
 - einen Slider für die Strömungsstärke,
-- drei synchronisierte Float-Eingabefelder für x-Richtung, y-Richtung und Stärke.
+- drei synchronisierte Float-Eingabefelder für x-Richtung, y-Richtung und Stärke,
+- eine zusätzliche **Impact**-Steuerung in Prozent, die intern auf den Gewichtungsparameter β der Kostenfunktion abgebildet wird,
+- ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
 
 Im Run-Tab werden Entscheidungsoptionen farblich hervorgehoben:
 - rot = ungültige Aktion,
 - gelb = gültige, aber nicht gewählte Aktion,
 - grün = aktuell beste Aktion gemäß Planung.
 
-Die Schaltfläche **Run Batch** ist derzeit bewusst noch als Platzhalter markiert.
+Die Aktionen **Run Single Experiment**, **Run Experiment Batch**, **Show Results** und **Compare** sind in der aktuellen UI ausschließlich über die obere Toolbar verfügbar.
 
 ## 9. Ergebnisartekfakt
 Das Ergebnisartefakt dieses Projekts besteht aus einem konsistenten und reproduzierbaren Satz an Experimenten sowie deren Auswertung. Es dient dazu, die implementierten Algorithmen unter identischen Bedingungen vergleichbar zu machen und ihre Eigenschaften systematisch zu analysieren. Dabei stehen sowohl die Qualität der gefundenen Lösungen als auch der Rechenaufwand und – im Fall von Reinforcement Learning – das Lernverhalten im Fokus.
 
 ### 9.1 Experimentelle Datensätze
 
-Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des zulässigen Anfahrwinkels.
+Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des befahrbaren Korridors und der diagonalen Start-/Zielbedingung.
 
 Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der heute sowohl den **besten resultierenden Pfad** als auch den **Run-Trace** für die Visualisierung enthält. Dazu gehören insbesondere:
 - `path` und `actions` als kompatible Standardfelder,
@@ -340,7 +338,7 @@ und wird zusammen mit den zugehörigen Aktionen gespeichert. Aus ihr wird die Ge
 
 J(π) = Σ t(s_t, a_t)
 
-Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der Anfahrbedingung überprüfen zu können.
+Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der diagonalen Zielbedingung überprüfen zu können.
 
 Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet und in der UI getrennt als **Run**, **Best path** und **Compare** genutzt werden können.
 
@@ -356,13 +354,13 @@ Ergänzend dazu wird die benötigte Rechenzeit betrachtet, sowohl in absoluten W
 
 Für das Q-Learning wird zusätzlich das Lernverhalten analysiert. Hierbei steht im Vordergrund, wie schnell sich eine stabile Strategie entwickelt und wie stark die Ergebnisse zwischen verschiedenen Durchläufen variieren. Der Verlauf der kumulierten Rewards pro Episode dient dabei als zentrales Diagnoseinstrument.
 
-Ein weiterer Aspekt der Analyse ist die Sensitivität gegenüber der Strömung. Durch Variation von Richtung und Stärke des Strömungsvektors wird untersucht, wie sich die resultierenden Pfade verändern und wie robust die einzelnen Verfahren auf diese Änderungen reagieren. Ebenso wird betrachtet, welchen Einfluss die Einschränkung des Anfahrwinkels auf die Lösungsstruktur und die Planungszeit hat.
+Ein weiterer Aspekt der Analyse ist die Sensitivität gegenüber der Strömung. Durch Variation von Richtung und Stärke des Strömungsvektors wird untersucht, wie sich die resultierenden Pfade verändern und wie robust die einzelnen Verfahren auf diese Änderungen reagieren. Ebenso wird betrachtet, welchen Einfluss die diagonale Start-/Zielbedingung und der Land-Wasser-Korridor auf Lösungsstruktur und Planungszeit haben.
 
 ### 9.3 Visuelle Aufbereitung
 
-Ein wesentlicher Bestandteil des Ergebnisartefakts ist die visuelle Darstellung der Ergebnisse. Für ausgewählte Szenarien werden die berechneten Trajektorien direkt im Gitter visualisiert. Dabei werden sowohl die Strömungsvektoren als auch der zulässige Anfahrkorridor am Zielpunkt dargestellt.
+Ein wesentlicher Bestandteil des Ergebnisartefakts ist die visuelle Darstellung der Ergebnisse. Für ausgewählte Szenarien werden die berechneten Trajektorien direkt im Gitter visualisiert. Dabei werden sowohl die Strömungsvektoren als auch der befahrbare Wasserkorridor zwischen Start und Ziel dargestellt.
 
-Diese Visualisierung ermöglicht es, Unterschiede zwischen den Algorithmen unmittelbar nachzuvollziehen. Insbesondere lassen sich typische Verhaltensweisen erkennen, etwa Umwege zur Einhaltung des Anfahrwinkels oder lokale Fehlentscheidungen beim Potentialfeldansatz.
+Diese Visualisierung ermöglicht es, Unterschiede zwischen den Algorithmen unmittelbar nachzuvollziehen. Insbesondere lassen sich typische Verhaltensweisen erkennen, etwa Umwege zur Einhaltung der diagonalen Endbedingung oder lokale Fehlentscheidungen beim Potentialfeldansatz.
 
 Ergänzend dazu kann die Bewegung des Schiffes entlang der Trajektorie animiert werden, um den zeitlichen Verlauf der Entscheidungsschritte sichtbar zu machen.
 
@@ -375,3 +373,20 @@ Dadurch lassen sich sämtliche Ergebnisse reproduzieren und gezielt variieren. G
 ### 9.5 Zusammenfassung
 
 Das Ergebnisartefakt stellt einen strukturierten und nachvollziehbaren Vergleich verschiedener Pfadplanungsverfahren in einer strömungsbehafteten Umgebung dar. Es verbindet experimentelle Daten, quantitative Auswertung und visuelle Analyse zu einem konsistenten Gesamtbild und ermöglicht damit eine fundierte Bewertung der eingesetzten Methoden.
+
+## 10. Kommandos
+### 10.1 Run Full Experiment Batch and Save Raw Results
+```bash
+python -c "from experiments.runner import run_all_experiments; run_all_experiments(config_dir='configs', output_path='analysis/raw_results.json')"
+```
+
+### 10.2 Evaluate Raw Results and Save Summary
+```bash
+python -c "from experiments.evaluator import evaluate_results; evaluate_results('analysis/raw_results.json', output_path='analysis/evaluation_summary.json', reference_algorithm='dijkstra')"
+```
+
+### 10.3 Optional: Run Fewer RL Episodes for Faster Batch Turnaround
+
+```bash
+python -c "from experiments.runner import run_all_experiments; run_all_experiments(config_dir='configs', output_path='analysis/raw_results_fast.json', rl_episodes=50)"
+```
