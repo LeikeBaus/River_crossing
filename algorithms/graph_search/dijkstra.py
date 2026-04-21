@@ -27,6 +27,12 @@ class PlanResult:
         Number of states popped from the priority queue (search effort).
     found:
         ``True`` when a valid solution was found.
+    exploration_path:
+        For algorithms that support it: one partial-path snapshot per
+        expansion step, ordered by expansion time.  Each snapshot is the
+        chain from ``start`` to the currently-expanded node reconstructed
+        through the predecessor map.  Empty for algorithms that do not
+        populate it.
     """
 
     path: list[State] = field(default_factory=list)
@@ -34,6 +40,7 @@ class PlanResult:
     total_cost: float = float("inf")
     nodes_expanded: int = 0
     found: bool = False
+    exploration_path: list[list[State]] = field(default_factory=list)
 
 
 def dijkstra(
@@ -75,6 +82,7 @@ def dijkstra(
     heap: list[tuple[float, int, State]] = [(0.0, counter, start)]
 
     nodes_expanded = 0
+    exploration_path: list[list[State]] = []
 
     goal = env.goal
 
@@ -86,6 +94,16 @@ def dijkstra(
             continue
 
         nodes_expanded += 1
+
+        # Reconstruct partial path from start to this expansion frontier.
+        snapshot: list[State] = []
+        cur = state
+        while cur in prev:
+            snapshot.append(cur)
+            cur, _ = prev[cur]
+        snapshot.append(start)
+        snapshot.reverse()
+        exploration_path.append(snapshot)
 
         for action in env.valid_actions(state):
             next_state = env.transition(state, action)
@@ -106,7 +124,11 @@ def dijkstra(
                 heapq.heappush(heap, (new_g, counter, next_state))
 
     if goal not in dist:
-        return PlanResult(nodes_expanded=nodes_expanded, found=False)
+        return PlanResult(
+            nodes_expanded=nodes_expanded,
+            found=False,
+            exploration_path=exploration_path,
+        )
 
     # Reconstruct path
     path: list[State] = []
@@ -127,4 +149,5 @@ def dijkstra(
         total_cost=dist[goal],
         nodes_expanded=nodes_expanded,
         found=True,
+        exploration_path=exploration_path,
     )

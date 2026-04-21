@@ -62,6 +62,8 @@ def value_iteration(
 
     iterations = 0
     residual = float("inf")
+    iteration_paths: list[list[State]] = []
+    _max_path_steps = 4 * env.grid.nx * env.grid.ny
 
     for iterations in range(1, max_iterations + 1):
         max_delta = 0.0
@@ -109,6 +111,18 @@ def value_iteration(
         V = new_V
         residual = max_delta
 
+        # Snapshot: follow current policy greedily from start.
+        snap: list[State] = [env.start]
+        _s = env.start
+        for _ in range(_max_path_steps):
+            if _s == goal or _s not in policy:
+                break
+            _s = env.transition(_s, policy[_s])
+            snap.append(_s)
+            if _s == goal:
+                break
+        iteration_paths.append(snap)
+
         if residual < tolerance:
             break
 
@@ -118,6 +132,7 @@ def value_iteration(
         iterations=iterations,
         residual=residual,
         converged=(residual < tolerance),
+        iteration_paths=iteration_paths,
     )
 
 
@@ -180,6 +195,11 @@ class ValueIterationResult:
         Final max |V_{k+1} − V_k| (Bellman residual).
     converged:
         ``True`` if the residual fell below *tolerance* before *max_iterations*.
+    iteration_paths:
+        One greedy policy-path snapshot per sweep, ordered by iteration.
+        Each snapshot is the path followed from ``env.start`` under the
+        current (partially-converged) policy.  Grows toward the optimal path
+        as value iteration converges.
     """
 
     def __init__(
@@ -189,12 +209,14 @@ class ValueIterationResult:
         iterations: int,
         residual: float,
         converged: bool,
+        iteration_paths: list[list[State]] | None = None,
     ) -> None:
         self.value_function = value_function
         self.policy = policy
         self.iterations = iterations
         self.residual = residual
         self.converged = converged
+        self.iteration_paths: list[list[State]] = iteration_paths or []
 
     @classmethod
     def from_config(

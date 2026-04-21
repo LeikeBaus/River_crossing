@@ -44,6 +44,7 @@ class ExperimentRunRecord:
     run_trace: list[dict[str, Any]] = field(default_factory=list)
     reward_history: list[float] = field(default_factory=list)
     success_rate: float | None = None
+    exploration_snapshots: list[list[list[int]]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -231,6 +232,7 @@ def _run_single_experiment(
         path, actions = extract_path(env, vi.policy)
         plan_time = time.perf_counter() - t0
         plan = _plan_result_from_path(env, cost_fn, path, actions, nodes_expanded=vi.iterations)
+        plan.exploration_path = vi.iteration_paths
         return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
 
     if algorithm == "apf":
@@ -253,6 +255,7 @@ def _run_single_experiment(
         t1 = time.perf_counter()
         plan = rollout_policy(env, cost_fn, train_result.policy)
         inference_time = time.perf_counter() - t1
+        plan.exploration_path = train_result.episode_paths
 
         return _record_from_plan(
             env,
@@ -310,6 +313,10 @@ def _record_from_plan(
     angle_valid = bool(plan.found and plan.path and plan.actions)
     total_time = plan_time + training_time + inference_time
     total_cost = None if not plan.found else float(plan.total_cost)
+    exploration_snapshots = [
+        [[s.i, s.j] for s in snapshot]
+        for snapshot in getattr(plan, "exploration_path", [])
+    ]
 
     return ExperimentRunRecord(
         environment_name=environment_name,
@@ -332,6 +339,7 @@ def _record_from_plan(
         run_trace=run_trace,
         reward_history=reward_history or [],
         success_rate=success_rate,
+        exploration_snapshots=exploration_snapshots,
     )
 
 

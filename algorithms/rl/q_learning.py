@@ -54,6 +54,7 @@ class QLearningResult:
     success_history: list[bool] = field(default_factory=list)
     steps_history: list[int] = field(default_factory=list)
     epsilon_history: list[float] = field(default_factory=list)
+    episode_paths: list[list[State]] = field(default_factory=list)
 
     @property
     def success_rate(self) -> float:
@@ -118,6 +119,7 @@ def q_learning_train(
     success_history: list[bool] = []
     steps_history: list[int] = []
     epsilon_history: list[float] = []
+    episode_paths_list: list[list[State]] = []
 
     for _ in range(episodes):
         state = env.start
@@ -125,6 +127,7 @@ def q_learning_train(
         success = False
         steps = 0
         visited_counts: dict[State, int] = {state: 1}
+        episode_path: list[State] = [state]
 
         for _step in range(max_steps_per_episode):
             steps += 1
@@ -160,6 +163,7 @@ def q_learning_train(
             set_q(state, action, new_q)
 
             state = next_state
+            episode_path.append(next_state)
             if done:
                 break
 
@@ -167,6 +171,7 @@ def q_learning_train(
         success_history.append(success)
         steps_history.append(steps)
         epsilon_history.append(epsilon)
+        episode_paths_list.append(episode_path)
 
         epsilon = max(epsilon_end, epsilon * epsilon_decay)
 
@@ -178,6 +183,7 @@ def q_learning_train(
         success_history=success_history,
         steps_history=steps_history,
         epsilon_history=epsilon_history,
+        episode_paths=episode_paths_list,
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +62,8 @@ class RenderRunData:
     run: dict[str, Any]
     path: list[tuple[int, int]]
     actions: list[tuple[int, int]]
+    best_path: list[tuple[int, int]] = field(default_factory=list)
+    exploration_snapshots: list[list[tuple[int, int]]] = field(default_factory=list)
 
 
 def parse_seed_options(values: list[int] | None) -> list[str]:
@@ -213,18 +215,30 @@ def format_metrics(run: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
 
 
 def build_render_run_data(runs: list[dict[str, Any]]) -> list[RenderRunData]:
-    return [
-        RenderRunData(
-            title=(
-                f"{run.get('algorithm')} | env={run.get('environment_name')} | "
-                f"seed={run.get('seed')}"
-            ),
-            run=run,
-            path=coerce_path(run.get("best_path", run.get("path", []))),
-            actions=coerce_actions(run.get("best_actions", run.get("actions", []))),
+    result = []
+    for run in runs:
+        best_path = coerce_path(run.get("best_path", run.get("path", [])))
+        actions = coerce_actions(run.get("best_actions", run.get("actions", [])))
+        raw_snaps = run.get("exploration_snapshots", [])
+        exploration_snapshots: list[list[tuple[int, int]]] = [
+            coerce_path(snap) for snap in raw_snaps
+        ]
+        # Run tab path: last exploration snapshot (most complete) or best path.
+        run_path = exploration_snapshots[-1] if exploration_snapshots else best_path
+        result.append(
+            RenderRunData(
+                title=(
+                    f"{run.get('algorithm')} | env={run.get('environment_name')} | "
+                    f"seed={run.get('seed')}"
+                ),
+                run=run,
+                path=run_path,
+                actions=actions,
+                best_path=best_path,
+                exploration_snapshots=exploration_snapshots,
+            )
         )
-        for run in runs
-    ]
+    return result
 
 
 def _format_number(value: Any) -> str:
@@ -1301,7 +1315,14 @@ class RiverCrossingMainWindow(QMainWindow):
             return
 
         env = self._current_environment()
-        visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
+        if self._single_run.exploration_snapshots:
+            snap_idx = max(0, min(self._single_frame - 1, len(self._single_run.exploration_snapshots) - 1))
+            visible_path = self._single_run.exploration_snapshots[snap_idx]
+            total = len(self._single_run.exploration_snapshots)
+            frame_label = f"explore {snap_idx + 1}/{total}"
+        else:
+            visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
+            frame_label = f"run frame={len(visible_path)}/{len(self._single_run.path)}"
         current_cell = visible_path[-1] if visible_path else start
         best_action = None
         next_action_index = max(0, len(visible_path) - 1)
@@ -1321,7 +1342,7 @@ class RiverCrossingMainWindow(QMainWindow):
             flow_vector=flow,
             show_flow=state.show_flow,
             show_labels=state.show_labels,
-            title_suffix=f"{self._single_run.title} | run frame={len(visible_path)}/{len(self._single_run.path)}",
+            title_suffix=f"{self._single_run.title} | {frame_label}",
             overlay_state=current_cell,
             action_overlay=overlay,
         )
@@ -1360,7 +1381,7 @@ class RiverCrossingMainWindow(QMainWindow):
             )
             return
 
-        visible_path = visible_path_for_frame(self._single_run.path, self._single_frame)
+        visible_path = visible_path_for_frame(self._single_run.best_path, self._single_frame)
         env = self._current_environment()
         current_cell = visible_path[-1] if visible_path else start
         best_action = None
@@ -1379,7 +1400,7 @@ class RiverCrossingMainWindow(QMainWindow):
             flow_vector=flow,
             show_flow=state.show_flow,
             show_labels=state.show_labels,
-            title_suffix=f"{self._single_run.title} | frame={len(visible_path)}/{len(self._single_run.path)}",
+            title_suffix=f"{self._single_run.title} | frame={len(visible_path)}/{len(self._single_run.best_path)}",
         )
         self.metrics_panel.update_metrics(format_metrics(self._single_run.run, self._records))
         self.metrics_panel.update_neighborhood(
@@ -1436,7 +1457,12 @@ class RiverCrossingMainWindow(QMainWindow):
 
     def _active_total_frames(self) -> int:
         if self.tabs.currentIndex() in {0, 1}:
-            return 0 if self._single_run is None else len(self._single_run.path)
+            if self._single_run is None:
+                return 0
+            if self.tabs.currentIndex() == 0 and self._single_run.exploration_snapshots:
+                return len(self._single_run.exploration_snapshots)
+            path = self._single_run.best_path if self.tabs.currentIndex() == 1 else self._single_run.path
+            return len(path)
         return max_frame_count(self._compare_runs)
 
     def _start_animation(self) -> None:

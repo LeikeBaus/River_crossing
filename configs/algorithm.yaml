@@ -28,5 +28,5 @@ q_learning:
   epsilon_decay: 0.998 # decay rate for exploration
   goal_reward: 25.0 # reward for a successful docking
   progress_reward_scale: 1.5 # bonus for moving toward the docking corridor
-  revisit_penalty: 0.75 # penalty for revisiting states
+  revisit_penalty: 0.5 # penalty for revisiting states
   approach_bonus: 2.5 # bonus for reaching a valid pre-docking state

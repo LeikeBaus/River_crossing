@@ -70,6 +70,7 @@ def weighted_astar(
     heap: list[tuple[float, float, int, State]] = [(start_h, 0.0, counter, start)]
 
     nodes_expanded = 0
+    exploration_path: list[list[State]] = []
 
     while heap:
         f_curr, g_curr, _, state = heapq.heappop(heap)
@@ -80,8 +81,18 @@ def weighted_astar(
 
         nodes_expanded += 1
 
+        # Record partial path snapshot from start to this expansion frontier.
+        snapshot: list[State] = []
+        cur = state
+        while cur in prev:
+            snapshot.append(cur)
+            cur, _ = prev[cur]
+        snapshot.append(start)
+        snapshot.reverse()
+        exploration_path.append(snapshot)
+
         if state == goal:
-            return _reconstruct_result(start, goal, prev, g_score[goal], nodes_expanded)
+            return _reconstruct_result(start, goal, prev, g_score[goal], nodes_expanded, exploration_path)
 
         for action in env.valid_actions(state):
             next_state = env.transition(state, action)
@@ -101,7 +112,7 @@ def weighted_astar(
                     (tentative_g + weight * h, tentative_g, counter, next_state),
                 )
 
-    return PlanResult(nodes_expanded=nodes_expanded, found=False)
+    return PlanResult(nodes_expanded=nodes_expanded, found=False, exploration_path=exploration_path)
 
 
 def astar_from_config(
@@ -158,6 +169,7 @@ def _reconstruct_result(
     prev: dict[State, tuple[State, Action]],
     total_cost: float,
     nodes_expanded: int,
+    exploration_path: list[list[State]] | None = None,
 ) -> PlanResult:
     path: list[State] = []
     actions: list[Action] = []
@@ -179,4 +191,5 @@ def _reconstruct_result(
         total_cost=total_cost,
         nodes_expanded=nodes_expanded,
         found=True,
+        exploration_path=exploration_path or [],
     )
