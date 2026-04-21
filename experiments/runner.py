@@ -68,7 +68,12 @@ def run_all_experiments(
     default_env_cfg = load_env_config(config_dir / "env.yaml")
 
     if rl_episodes is None:
-        rl_episodes = int(exp_cfg.get("q_learning_episodes", exp_cfg.get("episodes", 200)))
+        rl_episodes = int(
+            algo_cfg.get("q_learning", {}).get("episodes")
+            or exp_cfg.get("q_learning_episodes")
+            or exp_cfg.get("episodes")
+            or 200
+        )
 
     results: list[ExperimentRunRecord] = []
 
@@ -117,7 +122,12 @@ def run_single_experiment(
     default_env_cfg = load_env_config(config_dir / "env.yaml")
 
     if rl_episodes is None:
-        rl_episodes = int(exp_cfg.get("q_learning_episodes", exp_cfg.get("episodes", 200)))
+        rl_episodes = int(
+            algo_cfg.get("q_learning", {}).get("episodes")
+            or exp_cfg.get("q_learning_episodes")
+            or exp_cfg.get("episodes")
+            or 200
+        )
 
     env_entry = next(
         (
@@ -201,23 +211,25 @@ def _run_single_experiment(
     algo_cfg: dict[str, Any],
     rl_episodes: int,
 ) -> ExperimentRunRecord:
+    max_snapshots = int(algo_cfg.get("q_learning", {}).get("max_snapshots", 200))
+
     if algorithm == "dijkstra":
         t0 = time.perf_counter()
         plan = dijkstra(env, cost_fn)
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
     if algorithm == "a_star":
         t0 = time.perf_counter()
         plan = astar_from_config(env, cost_fn, algo_cfg["a_star"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
     if algorithm == "weighted_a_star":
         t0 = time.perf_counter()
         plan = weighted_astar_from_config(env, cost_fn, algo_cfg["weighted_a_star"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
     if algorithm == "dynamic_programming":
         dp_cfg = algo_cfg["dynamic_programming"]
@@ -233,13 +245,13 @@ def _run_single_experiment(
         plan_time = time.perf_counter() - t0
         plan = _plan_result_from_path(env, cost_fn, path, actions, nodes_expanded=vi.iterations)
         plan.exploration_path = vi.iteration_paths
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
     if algorithm == "apf":
         t0 = time.perf_counter()
         plan = apf_from_config(env, cost_fn, algo_cfg["apf"])
         plan_time = time.perf_counter() - t0
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time)
+        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
     if algorithm == "q_learning":
         t0 = time.perf_counter()
@@ -267,6 +279,7 @@ def _run_single_experiment(
             inference_time=inference_time,
             reward_history=train_result.reward_history,
             success_rate=train_result.success_rate,
+            max_snapshots=max_snapshots,
         )
 
     raise ValueError(f"Unsupported algorithm: {algorithm!r}")
@@ -306,6 +319,7 @@ def _record_from_plan(
     inference_time: float = 0.0,
     reward_history: list[float] | None = None,
     success_rate: float | None = None,
+    max_snapshots: int = 200,
 ) -> ExperimentRunRecord:
     path = [[state.i, state.j] for state in plan.path]
     actions = [[action[0], action[1]] for action in plan.actions]
@@ -317,6 +331,13 @@ def _record_from_plan(
         [[s.i, s.j] for s in snapshot]
         for snapshot in getattr(plan, "exploration_path", [])
     ]
+    # Cap snapshots to keep JSON size and UI memory usage manageable.
+    if len(exploration_snapshots) > max_snapshots:
+        step = len(exploration_snapshots) / max_snapshots
+        exploration_snapshots = [
+            exploration_snapshots[int(i * step)]
+            for i in range(max_snapshots)
+        ]
 
     return ExperimentRunRecord(
         environment_name=environment_name,

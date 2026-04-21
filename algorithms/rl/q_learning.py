@@ -78,11 +78,25 @@ def q_learning_train(
     progress_reward_scale: float = 1.5,
     revisit_penalty: float = 0.75,
     approach_bonus: float = 2.5,
+    min_success_rate_for_decay: float = 0.0,
+    success_window: int = 50,
 ) -> QLearningResult:
     """Train a tabular Q-learning agent.
 
     Reward is defined as ``r = -c(s, a)`` to match the project objective of
     minimizing traversal cost.
+
+    Parameters
+    ----------
+    min_success_rate_for_decay:
+        Minimum recent success rate required before epsilon is decayed.
+        Set to e.g. 0.05 when opposing flow makes the goal hard to reach:
+        exploration stays high until the agent finds the goal reliably,
+        preventing premature exploitation of an empty Q-table.  Default 0.0
+        preserves the original fixed-schedule behaviour.
+    success_window:
+        Number of recent episodes used to compute the success rate that
+        gates epsilon decay.
     """
     if episodes <= 0:
         raise ValueError(f"episodes must be > 0, got {episodes}.")
@@ -98,6 +112,10 @@ def q_learning_train(
         raise ValueError(f"epsilon_decay must be in (0,1], got {epsilon_decay}.")
     if goal_reward < 0 or progress_reward_scale < 0 or revisit_penalty < 0 or approach_bonus < 0:
         raise ValueError("reward-shaping parameters must be >= 0.")
+    if not (0.0 <= min_success_rate_for_decay <= 1.0):
+        raise ValueError(f"min_success_rate_for_decay must be in [0, 1], got {min_success_rate_for_decay}.")
+    if success_window < 1:
+        raise ValueError(f"success_window must be >= 1, got {success_window}.")
 
     if max_steps_per_episode is None:
         max_steps_per_episode = 4 * env.grid.nx * env.grid.ny
@@ -120,6 +138,7 @@ def q_learning_train(
     steps_history: list[int] = []
     epsilon_history: list[float] = []
     episode_paths_list: list[list[State]] = []
+    recent_successes: list[bool] = []
 
     for _ in range(episodes):
         state = env.start
@@ -173,7 +192,15 @@ def q_learning_train(
         epsilon_history.append(epsilon)
         episode_paths_list.append(episode_path)
 
-        epsilon = max(epsilon_end, epsilon * epsilon_decay)
+        # Adaptive epsilon decay: only reduce exploration once the agent is
+        # finding the goal often enough.  With min_success_rate_for_decay=0.0
+        # (default) this always decays, matching the original behaviour.
+        recent_successes.append(success)
+        if len(recent_successes) > success_window:
+            recent_successes.pop(0)
+        recent_rate = sum(recent_successes) / len(recent_successes)
+        if recent_rate >= min_success_rate_for_decay:
+            epsilon = max(epsilon_end, epsilon * epsilon_decay)
 
     policy = extract_policy(env, q_table)
     return QLearningResult(
@@ -266,6 +293,9 @@ def q_learning_from_config(
     max_steps_per_episode: int | None = None,
 ) -> QLearningResult:
     """Train Q-learning from ``q_learning`` config section."""
+    cfg_max_steps = q_config.get("max_steps_per_episode")
+    if max_steps_per_episode is None and cfg_max_steps is not None:
+        max_steps_per_episode = int(cfg_max_steps)
     return q_learning_train(
         env=env,
         cost_fn=cost_fn,
@@ -281,6 +311,8 @@ def q_learning_from_config(
         progress_reward_scale=float(q_config.get("progress_reward_scale", 1.5)),
         revisit_penalty=float(q_config.get("revisit_penalty", 0.75)),
         approach_bonus=float(q_config.get("approach_bonus", 2.5)),
+        min_success_rate_for_decay=float(q_config.get("min_success_rate_for_decay", 0.0)),
+        success_window=int(q_config.get("success_window", 50)),
     )
 
 
