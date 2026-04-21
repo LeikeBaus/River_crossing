@@ -273,17 +273,27 @@ class SimulationWorker(QObject):
             self.progress.emit(15)
 
             if self.mode == "run_single_experiment":
-                self.message.emit("Running selected experiment...")
-                record = run_single_experiment(
-                    environment_name=self.selection.environment,
-                    algorithm=self.selection.algorithm,
-                    seed=self.selection.seed,
-                    config_dir=self.config_dir,
-                    flow_vector_override=self.selection.flow_vector,
-                    impact_override=self.selection.impact,
-                )
-                self.progress.emit(100)
-                self.result.emit({"mode": "run_single_experiment", "run": record.to_dict()})
+                self.message.emit("Running selected experiment for all configured seeds...")
+                exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
+                seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
+                runs: list[dict] = []
+                for idx, seed in enumerate(seeds):
+                    self.message.emit(f"Running seed {seed} ({idx + 1}/{len(seeds)})...")
+                    record = run_single_experiment(
+                        environment_name=self.selection.environment,
+                        algorithm=self.selection.algorithm,
+                        seed=seed,
+                        config_dir=self.config_dir,
+                        flow_vector_override=self.selection.flow_vector,
+                        impact_override=self.selection.impact,
+                    )
+                    runs.append(record.to_dict())
+                    self.progress.emit(int(15 + 85 * (idx + 1) / len(seeds)))
+                self.result.emit({
+                    "mode": "run_single_experiment",
+                    "runs": runs,
+                    "selected_seed": self.selection.seed,
+                })
                 return
 
             if self.mode == "run_batch_experiment":
@@ -679,7 +689,7 @@ class ControlPanel(QWidget):
         self.flow_direction_dial.setNotchesVisible(True)
 
         self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
-        self.flow_strength_slider.setRange(0, 500)
+        self.flow_strength_slider.setRange(0, 100)
         self.flow_strength_slider.setValue(100)
 
         self.flow_x_edit = QLineEdit("1.000")
@@ -1148,10 +1158,20 @@ class RiverCrossingMainWindow(QMainWindow):
         mode = str(payload.get("mode", ""))
 
         if mode == "run_single_experiment":
-            run = dict(payload["run"])
-            self._upsert_record(run)
-            self._set_single_run(run)
-            self._append_log("Single experiment finished and rendered.")
+            runs_list = [dict(r) for r in payload.get("runs", [])]
+            for run in runs_list:
+                self._upsert_record(run)
+            # Display the run matching the currently-selected seed if available.
+            selected_seed = int(payload.get("selected_seed", self.control_panel.selection_state().seed))
+            display_run = next(
+                (r for r in runs_list if int(r.get("seed", -1)) == selected_seed),
+                runs_list[0] if runs_list else None,
+            )
+            if display_run is not None:
+                self._set_single_run(display_run)
+            self._append_log(
+                f"Single experiment finished: {len(runs_list)} seed(s) run, rendering seed={selected_seed}."
+            )
             return
 
         if mode == "run_batch_experiment":

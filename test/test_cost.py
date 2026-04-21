@@ -86,22 +86,27 @@ class TestFlowEnergyCost(unittest.TestCase):
         self.assertAlmostEqual(cost(State(0, 0), (1, 0)), 0.0)
 
     def test_perpendicular_action(self) -> None:
-        # flow = (1, 0), action = (0, 1) → diff = (-1, 1) → E = 1+1 = 2
+        # flow = (1, 0), action = (0, 1)
+        # flow_along=0, parallel_residual=1, perp_sq=1 → E = sqrt(2)
         flow = ConstantFlow(vi=1.0, vj=0.0)
         cost = FlowEnergyCost(flow)
-        self.assertAlmostEqual(cost(State(0, 0), (0, 1)), 2.0)
+        self.assertAlmostEqual(cost(State(0, 0), (0, 1)), math.sqrt(2))
 
     def test_opposing_action(self) -> None:
-        # flow = (1, 0), action = (-1, 0) → diff = (-2, 0) → E = 4
+        # flow = (1, 0), action = (-1, 0)
+        # flow_along=-1, parallel_residual=2, perp_sq=0 → E = sqrt(4) = 2
         flow = ConstantFlow(vi=1.0, vj=0.0)
         cost = FlowEnergyCost(flow)
-        self.assertAlmostEqual(cost(State(0, 0), (-1, 0)), 4.0)
+        self.assertAlmostEqual(cost(State(0, 0), (-1, 0)), 2.0)
 
-    def test_zero_flow_energy_equals_action_norm_sq(self) -> None:
+    def test_zero_flow_energy_equals_action_norm(self) -> None:
         flow = ConstantFlow(vi=0.0, vj=0.0)
         cost = FlowEnergyCost(flow)
-        # action (1, 1) → diff = (1,1) → E = 2
-        self.assertAlmostEqual(cost(State(0, 0), (1, 1)), 2.0)
+        # No flow: energy equals Euclidean action length
+        # h/v action (1, 0) → E = 1
+        self.assertAlmostEqual(cost(State(0, 0), (1, 0)), 1.0)
+        # diagonal action (1, 1) → E = sqrt(2)
+        self.assertAlmostEqual(cost(State(0, 0), (1, 1)), math.sqrt(2))
 
     def test_spatially_uniform(self) -> None:
         flow = ConstantFlow(vi=0.5, vj=0.3)
@@ -116,6 +121,24 @@ class TestFlowEnergyCost(unittest.TestCase):
         s = State(3, 3)
         for action in ACTIONS:
             self.assertGreaterEqual(cost(s, action), 0.0)
+
+    def test_strong_aligned_flow_gives_zero_energy(self) -> None:
+        # flow = (3, 0), action = (1, 0) — flow overshoots along action dir → E = 0
+        flow = ConstantFlow(vi=3.0, vj=0.0)
+        cost = FlowEnergyCost(flow)
+        self.assertAlmostEqual(cost(State(0, 0), (1, 0)), 0.0)
+
+    def test_energy_minimum_at_max_aligned_flow(self) -> None:
+        # Increasing aligned flow from 0 to 5: cost must be non-increasing
+        s = State(0, 0)
+        prev_cost = None
+        for strength in [0.0, 0.25, 0.5, 0.75, 1.0, 2.0, 5.0]:
+            flow = ConstantFlow(vi=strength, vj=0.0)
+            cost = FlowEnergyCost(flow)
+            val = cost(s, (1, 0))
+            if prev_cost is not None:
+                self.assertLessEqual(round(val, 10), round(prev_cost, 10))
+            prev_cost = val
 
 
 # ---------------------------------------------------------------------------
@@ -133,17 +156,17 @@ class TestCostFunction(unittest.TestCase):
         self.assertAlmostEqual(cf(s, (1, 1)), math.sqrt(2))
 
     def test_beta_only_equals_energy_cost(self) -> None:
-        # flow = (1, 0), action = (-1, 0): E = 4
+        # flow = (1, 0), action = (-1, 0): E = 2
         cf = _make_cost(alpha=0.0, beta=1.0)
         s = State(5, 5)
-        self.assertAlmostEqual(cf(s, (-1, 0)), 4.0)
+        self.assertAlmostEqual(cf(s, (-1, 0)), 2.0)
 
     def test_combined_weights(self) -> None:
         # alpha=2, beta=3, flow=(1,0), action=(0,1)
-        # t = 1.0, E = 1^2+1^2=2 → c = 2*1 + 3*2 = 8
+        # t = 1.0, E = sqrt(2) → c = 2*1 + 3*sqrt(2)
         cf = _make_cost(alpha=2.0, beta=3.0)
         s = State(5, 5)
-        self.assertAlmostEqual(cf(s, (0, 1)), 8.0)
+        self.assertAlmostEqual(cf(s, (0, 1)), 2.0 + 3.0 * math.sqrt(2))
 
     def test_time_component_accessor(self) -> None:
         cf = _make_cost(alpha=1.0, beta=0.0)

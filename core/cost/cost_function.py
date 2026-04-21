@@ -64,9 +64,21 @@ class FlowEnergyCost(EnergyCost):
     def __call__(self, state: State, action: Action) -> float:
         vi, vj = self._flow.at(state)
         di, dj = action
-        diff_i = di - vi
-        diff_j = dj - vj
-        return diff_i * diff_i + diff_j * diff_j
+        action_mag_sq = di * di + dj * dj
+        if action_mag_sq == 0.0:
+            return 0.0
+        action_mag = math.sqrt(action_mag_sq)
+        # Signed projection of flow onto the action direction.
+        flow_along = (di * vi + dj * vj) / action_mag
+        # Thrust needed along the action direction; clamped to 0 when flow
+        # already carries the agent at least as far as needed.
+        parallel_residual = max(0.0, action_mag - flow_along)
+        # Squared magnitude of the flow component perpendicular to the action;
+        # this must be counteracted regardless of flow strength.
+        perp_sq = max(0.0, vi * vi + vj * vj - flow_along * flow_along)
+        # Return L2 norm of required thrust so the base cost (no flow) matches
+        # the Euclidean time cost: 1 for h/v moves, sqrt(2) for diagonals.
+        return math.sqrt(parallel_residual * parallel_residual + perp_sq)
 
 
 # ---------------------------------------------------------------------------
