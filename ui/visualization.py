@@ -43,7 +43,13 @@ from core.environment.actions import ACTIONS, Action
 from core.environment.environment import RiverEnvironment
 from core.environment.grid import State
 from experiments.evaluator import evaluate_results
-from experiments.runner import load_experiment_results, run_all_experiments, run_single_experiment
+from experiments.experiment_id import build_experiment_id, results_paths
+from experiments.runner import (
+    load_experiment_results,
+    run_all_experiments,
+    run_single_experiment,
+    save_experiment_results,
+)
 
 
 @dataclass(frozen=True)
@@ -277,14 +283,14 @@ class SimulationWorker(QObject):
         records: list[dict[str, Any]],
         selection: UISelectionState,
         config_dir: Path,
-        results_path: Path,
+        analysis_dir: Path,
     ) -> None:
         super().__init__()
         self.mode = mode
         self.records = records
         self.selection = selection
         self.config_dir = config_dir
-        self.results_path = results_path
+        self.analysis_dir = analysis_dir
 
     def run(self) -> None:
         try:
@@ -292,13 +298,38 @@ class SimulationWorker(QObject):
             self.progress.emit(15)
 
             if self.mode == "run_single_experiment":
-                self.message.emit("Running selected experiment for all configured seeds...")
+                algo_cfg = load_algorithm_config(self.config_dir / "algorithm.yaml")
                 exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
                 seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
-                runs: list[dict] = []
                 flow_cfg = self._build_flow_config_override(self.selection)
+                effective_algo = self._effective_algo_cfg(algo_cfg)
+                exp_id = build_experiment_id(
+                    flow_cfg=flow_cfg,
+                    algo_cfg=effective_algo,
+                    seeds=seeds,
+                    algorithm=self.selection.algorithm,
+                )
+                raw_path, ev_path = results_paths(exp_id, self.analysis_dir)
+
+                if raw_path.exists():
+                    self.message.emit(f"Cache hit \u2014 loading {raw_path.name}")
+                    runs: list[dict] = load_experiment_results(raw_path)
+                    if not ev_path.exists():
+                        evaluate_results(runs, output_path=ev_path)
+                    self.progress.emit(100)
+                    self.result.emit({
+                        "mode": "run_single_experiment",
+                        "runs": runs,
+                        "selected_seed": self.selection.seed,
+                        "cached": True,
+                        "results_path": str(raw_path),
+                    })
+                    return
+
+                self.message.emit(f"Running {self.selection.algorithm} for all configured seeds...")
+                runs = []
                 for idx, seed in enumerate(seeds):
-                    self.message.emit(f"Running seed {seed} ({idx + 1}/{len(seeds)})...")
+                    self.message.emit(f"  Seed {seed} ({idx + 1}/{len(seeds)})...")
                     record = run_single_experiment(
                         environment_name=self.selection.environment,
                         algorithm=self.selection.algorithm,
@@ -310,34 +341,64 @@ class SimulationWorker(QObject):
                     )
                     runs.append(record.to_dict())
                     self.progress.emit(int(15 + 85 * (idx + 1) / len(seeds)))
+                self.analysis_dir.mkdir(parents=True, exist_ok=True)
+                save_experiment_results(raw_path, runs)
+                evaluate_results(runs, output_path=ev_path)
+                self.message.emit(f"Saved \u2192 {raw_path.name}")
                 self.result.emit({
                     "mode": "run_single_experiment",
                     "runs": runs,
                     "selected_seed": self.selection.seed,
+                    "cached": False,
+                    "results_path": str(raw_path),
                 })
                 return
 
             if self.mode == "run_batch_experiment":
-                self.message.emit("Running experiment batch and evaluation...")
+                algo_cfg = load_algorithm_config(self.config_dir / "algorithm.yaml")
+                exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
+                seeds = [int(s) for s in exp_cfg.get("seeds", [])]
                 flow_cfg = self._build_flow_config_override(self.selection)
+                effective_algo = self._effective_algo_cfg(algo_cfg)
+                exp_id = build_experiment_id(
+                    flow_cfg=flow_cfg,
+                    algo_cfg=effective_algo,
+                    seeds=seeds,
+                )
+                raw_path, ev_path = results_paths(exp_id, self.analysis_dir)
+
+                if raw_path.exists():
+                    self.message.emit(f"Cache hit \u2014 loading {raw_path.name}")
+                    records_dicts: list[dict] = load_experiment_results(raw_path)
+                    if not ev_path.exists():
+                        evaluate_results(records_dicts, output_path=ev_path)
+                    self.progress.emit(100)
+                    self.result.emit({
+                        "mode": "run_batch_experiment",
+                        "records": records_dicts,
+                        "results_path": str(raw_path),
+                        "summary_path": str(ev_path),
+                        "cached": True,
+                    })
+                    return
+
+                self.message.emit("Running experiment batch and evaluation...")
                 records = run_all_experiments(
                     config_dir=self.config_dir,
-                    output_path=self.results_path,
+                    output_path=raw_path,
                     flow_config_override=flow_cfg,
                     impact_override=self.selection.impact,
                     inertia_override=self.selection.inertia,
                 )
-                summary_path = self.results_path.parent / "evaluation_summary.json"
-                evaluate_results(records, output_path=summary_path)
+                evaluate_results(records, output_path=ev_path)
                 self.progress.emit(100)
-                self.result.emit(
-                    {
-                        "mode": "run_batch_experiment",
-                        "records": [record.to_dict() for record in records],
-                        "results_path": str(self.results_path),
-                        "summary_path": str(summary_path),
-                    }
-                )
+                self.result.emit({
+                    "mode": "run_batch_experiment",
+                    "records": [r.to_dict() for r in records],
+                    "results_path": str(raw_path),
+                    "summary_path": str(ev_path),
+                    "cached": False,
+                })
                 return
 
             if self.mode == "show_results":
@@ -366,6 +427,15 @@ class SimulationWorker(QObject):
             self.error.emit(str(exc))
         finally:
             self.finished.emit()
+
+    def _effective_algo_cfg(self, algo_cfg: dict) -> dict:
+        """Return algo_cfg with the current UI impact (beta) and inertia applied."""
+        effective_common = dict(algo_cfg.get("common", {}))
+        effective_common["beta"] = self.selection.impact
+        effective_common["inertia"] = self.selection.inertia
+        effective = dict(algo_cfg)
+        effective["common"] = effective_common
+        return effective
 
     @staticmethod
     def _build_flow_config_override(selection: UISelectionState) -> dict:
@@ -732,10 +802,11 @@ class ControlPanel(QWidget):
         self.flow_dir_up.setChecked(True)
 
         self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
-        self.flow_strength_slider.setRange(0, 200)
-        self.flow_strength_slider.setValue(100)
+        self.flow_strength_slider.setRange(0, 10)
+        self.flow_strength_slider.setSingleStep(1)
+        self.flow_strength_slider.setValue(10)
 
-        self.flow_strength_edit = QLineEdit("1.000")
+        self.flow_strength_edit = QLineEdit("1.0")
         self.flow_strength_edit.setMaximumWidth(100)
 
         # Gaussian-only parameters
@@ -856,8 +927,8 @@ class ControlPanel(QWidget):
         else:
             self.flow_dir_up.setChecked(True)
 
-        self.flow_strength_slider.setValue(int(round(strength * 100.0)))
-        self.flow_strength_edit.setText(f"{strength:.3f}")
+        self.flow_strength_slider.setValue(int(round(min(strength, 1.0) * 10.0)))
+        self.flow_strength_edit.setText(f"{min(strength, 1.0):.1f}")
 
         sigma = float(flow_cfg.get("sigma", 5.0))
         floor_pct = float(flow_cfg.get("floor", 0.1)) * 100.0
@@ -866,7 +937,7 @@ class ControlPanel(QWidget):
         self._updating_flow_controls = False
 
     def flow_vector(self) -> tuple[float, float]:
-        strength = self.flow_strength_slider.value() / 100.0
+        strength = self.flow_strength_slider.value() / 10.0
         vj = -strength if self.flow_dir_down.isChecked() else strength
         return (0.0, vj)
 
@@ -874,7 +945,7 @@ class ControlPanel(QWidget):
         if self._updating_flow_controls:
             return
         self._updating_flow_controls = True
-        self.flow_strength_edit.setText(f"{value / 100.0:.3f}")
+        self.flow_strength_edit.setText(f"{value / 10.0:.1f}")
         self._updating_flow_controls = False
         self.redraw_requested.emit()
 
@@ -882,12 +953,12 @@ class ControlPanel(QWidget):
         if self._updating_flow_controls:
             return
         try:
-            strength = max(0.0, float(self.flow_strength_edit.text()))
+            strength = max(0.0, min(1.0, float(self.flow_strength_edit.text())))
         except ValueError:
             return
         self._updating_flow_controls = True
-        self.flow_strength_slider.setValue(int(round(strength * 100.0)))
-        self.flow_strength_edit.setText(f"{strength:.3f}")
+        self.flow_strength_slider.setValue(int(round(strength * 10.0)))
+        self.flow_strength_edit.setText(f"{strength:.1f}")
         self._updating_flow_controls = False
         self.redraw_requested.emit()
 
@@ -1039,7 +1110,8 @@ class RiverCrossingMainWindow(QMainWindow):
         self._worker_thread: QThread | None = None
         self._worker: SimulationWorker | None = None
         self._records: list[dict[str, Any]] = []
-        self._results_path = Path("analysis/raw_results.json")
+        self._results_path = Path("analysis/raw_results.json")  # kept for manual Load Results
+        self._analysis_dir = Path("analysis")
         self._single_run: RenderRunData | None = None
         self._compare_runs: list[RenderRunData] = []
         self._single_frame = 0
@@ -1089,7 +1161,7 @@ class RiverCrossingMainWindow(QMainWindow):
         self.control_panel.redraw_requested.connect(self._handle_redraw_request)
 
         self._apply_env_to_views()
-        self._load_records_if_available(self._results_path)
+        self._try_autoload_latest_results()
 
     def _apply_env_to_views(self) -> None:
         nx = int(self._env_cfg["grid"]["nx"])
@@ -1195,6 +1267,18 @@ class RiverCrossingMainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             self._append_log(f"Failed to load results from {path}: {exc}")
 
+    def _try_autoload_latest_results(self) -> None:
+        """Load the most recently modified R-*.json from the analysis directory on startup."""
+        if not self._analysis_dir.exists():
+            return
+        candidates = sorted(
+            self._analysis_dir.glob("R-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            self._load_records_if_available(candidates[0])
+
     def _export_current_tab_png(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1230,7 +1314,7 @@ class RiverCrossingMainWindow(QMainWindow):
             list(self._records),
             selection,
             config_dir=Path("configs"),
-            results_path=self._results_path,
+            analysis_dir=self._analysis_dir,
         )
         self._worker.moveToThread(self._worker_thread)
 
@@ -1252,7 +1336,6 @@ class RiverCrossingMainWindow(QMainWindow):
             runs_list = [dict(r) for r in payload.get("runs", [])]
             for run in runs_list:
                 self._upsert_record(run)
-            # Display the run matching the currently-selected seed if available.
             selected_seed = int(payload.get("selected_seed", self.control_panel.selection_state().seed))
             display_run = next(
                 (r for r in runs_list if int(r.get("seed", -1)) == selected_seed),
@@ -1260,15 +1343,19 @@ class RiverCrossingMainWindow(QMainWindow):
             )
             if display_run is not None:
                 self._set_single_run(display_run)
+            source = " (cached)" if payload.get("cached") else ""
             self._append_log(
-                f"Single experiment finished: {len(runs_list)} seed(s) run, rendering seed={selected_seed}."
+                f"Single experiment{source}: {len(runs_list)} seed(s), rendering seed={selected_seed}."
             )
+            if payload.get("results_path"):
+                self._append_log(f"Results: {payload['results_path']}")
             return
 
         if mode == "run_batch_experiment":
             self._records = [dict(item) for item in payload.get("records", [])]
-            self._append_log(f"Batch finished: {len(self._records)} runs saved to {payload.get('results_path')}")
-            self._append_log(f"Evaluation summary saved to {payload.get('summary_path')}")
+            source = "loaded from cache" if payload.get("cached") else "saved"
+            self._append_log(f"Batch results {source}: {len(self._records)} runs → {payload.get('results_path')}")
+            self._append_log(f"Evaluation summary: {payload.get('summary_path')}")
             self.metrics_panel.update_metrics({})
             return
 

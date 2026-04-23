@@ -164,12 +164,19 @@ def run_single_experiment(
 
 def save_experiment_results(
     output_path: str | Path,
-    results: list[ExperimentRunRecord],
+    results: list[ExperimentRunRecord] | list[dict[str, Any]],
 ) -> None:
-    """Save raw experiment records as JSON."""
+    """Save raw experiment records as JSON.
+
+    Accepts both :class:`ExperimentRunRecord` instances and plain dicts so that
+    callers that have already serialised records can pass them directly.
+    """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = [record.to_dict() for record in results]
+    payload = [
+        record.to_dict() if isinstance(record, ExperimentRunRecord) else record
+        for record in results
+    ]
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
