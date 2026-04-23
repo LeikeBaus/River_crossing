@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && source \\.venv/bin/activate && python -c \"\nfrom core\\.dynamics\\.flow import make_flow\nfrom core\\.environment\\.grid import State\n\n# 10-column grid; centre at i=4\\.5\nf = make_flow\\(\\{'type': 'gaussian', 'vector': \\[0\\.0, 1\\.0\\], 'sigma': 2\\.0, 'floor': 0\\.1\\}, nx=10\\)\n\n# Middle column \\(i=4 and i=5\\) should be ~max\nfor i in \\[0, 2, 4, 5, 7, 9\\]:\n    vi, vj = f\\.at\\(State\\(i=i, j=3\\)\\)\n    print\\(f'  i=\\{i\\}, j=3 -> vj=\\{vj:\\.3f\\}'\\)\n\"\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

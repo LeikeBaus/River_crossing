@@ -1,6 +1,8 @@
 common:
   alpha: 1.0 # weight for time cost
-  beta: 0.0 # weifght for energy cost
+  beta: 1.0 # weight for energy cost
+  inertia: 2 # heading-history depth (0 = disabled, ≤5 recommended)
+  turn_penalty: 1.0 # multiplier for the turn cost term
 
 dijkstra: {}
 

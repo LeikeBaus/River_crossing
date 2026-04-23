@@ -1,8 +1,10 @@
 seeds: [1, 2, 3, 4, 5]
 
 environments:
-  - name: baseline
+  - name: gaussian
     env_config: configs/env.yaml
+  - name: constant
+    env_config: configs/env_constant.yaml
 
 algorithms:
   - dijkstra

@@ -90,7 +90,7 @@ class RiverEnvironment:
         grid_cfg = env_config["grid"]
         grid = Grid(grid_cfg["nx"], grid_cfg["ny"])
 
-        flow = make_flow(env_config["flow"])
+        flow = make_flow(env_config["flow"], nx=grid.nx)
 
         start = State(*env_config["start"])
         goal = State(*env_config["goal"])

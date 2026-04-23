@@ -54,8 +54,9 @@ def run_all_experiments(
     config_dir: str | Path = "configs",
     output_path: str | Path | None = None,
     rl_episodes: int | None = None,
-    flow_vector_override: tuple[float, float] | None = None,
+    flow_config_override: dict | None = None,
     impact_override: float | None = None,
+    inertia_override: int | None = None,
 ) -> list[ExperimentRunRecord]:
     """Run the configured batch of experiments and optionally save raw results.
 
@@ -79,15 +80,15 @@ def run_all_experiments(
 
     for env_entry in exp_cfg["environments"]:
         env_name, env_cfg = _resolve_environment_config(config_dir, env_entry, default_env_cfg)
-        if flow_vector_override is not None:
+        if flow_config_override is not None:
             env_cfg = dict(env_cfg)
-            env_cfg["flow"] = dict(env_cfg.get("flow", {}))
-            env_cfg["flow"]["vector"] = [float(flow_vector_override[0]), float(flow_vector_override[1])]
+            env_cfg["flow"] = dict(flow_config_override)
 
         for algorithm in exp_cfg["algorithms"]:
             for seed in exp_cfg["seeds"]:
                 env = RiverEnvironment.from_config(env_cfg)
                 effective_algo_cfg = _algo_config_with_impact(algo_cfg, impact_override)
+                effective_algo_cfg = _algo_config_with_inertia(effective_algo_cfg, inertia_override)
                 cost_fn = CostFunction.from_config(effective_algo_cfg, env.flow)
                 record = _run_single_experiment(
                     env=env,
@@ -112,8 +113,9 @@ def run_single_experiment(
     seed: int,
     config_dir: str | Path = "configs",
     rl_episodes: int | None = None,
-    flow_vector_override: tuple[float, float] | None = None,
+    flow_config_override: dict | None = None,
     impact_override: float | None = None,
+    inertia_override: int | None = None,
 ) -> ExperimentRunRecord:
     """Run one configured experiment for a selected environment/algorithm/seed."""
     config_dir = Path(config_dir)
@@ -141,12 +143,12 @@ def run_single_experiment(
         raise ValueError(f"Unknown environment: {environment_name!r}")
 
     env_name, env_cfg = _resolve_environment_config(config_dir, env_entry, default_env_cfg)
-    if flow_vector_override is not None:
+    if flow_config_override is not None:
         env_cfg = dict(env_cfg)
-        env_cfg["flow"] = dict(env_cfg.get("flow", {}))
-        env_cfg["flow"]["vector"] = [float(flow_vector_override[0]), float(flow_vector_override[1])]
+        env_cfg["flow"] = dict(flow_config_override)
     env = RiverEnvironment.from_config(env_cfg)
     effective_algo_cfg = _algo_config_with_impact(algo_cfg, impact_override)
+    effective_algo_cfg = _algo_config_with_inertia(effective_algo_cfg, inertia_override)
     cost_fn = CostFunction.from_config(effective_algo_cfg, env.flow)
 
     return _run_single_experiment(
@@ -199,6 +201,19 @@ def _algo_config_with_impact(
     effective = dict(algo_cfg)
     effective["common"] = dict(effective.get("common", {}))
     effective["common"]["beta"] = float(impact_override)
+    return effective
+
+
+def _algo_config_with_inertia(
+    algo_cfg: dict[str, Any],
+    inertia_override: int | None,
+) -> dict[str, Any]:
+    if inertia_override is None:
+        return algo_cfg
+
+    effective = dict(algo_cfg)
+    effective["common"] = dict(effective.get("common", {}))
+    effective["common"]["inertia"] = max(0, int(inertia_override))
     return effective
 
 

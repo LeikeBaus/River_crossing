@@ -3,10 +3,8 @@ grid:
   ny: 20
 
 flow:
-  type: gaussian
+  type: constant
   vector: [0.0, 1.0] # flow direction: (0, +1) = bottom→top
-  sigma: 5.0          # Gaussian width in grid cells
-  floor: 0.1          # minimum flow fraction at the shore edges
 
 start: [2, 5]
 goal: [37, 15]

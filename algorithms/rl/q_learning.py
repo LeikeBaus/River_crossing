@@ -48,8 +48,9 @@ def _guidance_distance(env: RiverEnvironment, state: State) -> float:
 class QLearningResult:
     """Result bundle produced by Q-learning training."""
 
-    q_table: dict[State, dict[Action, float]] = field(default_factory=dict)
-    policy: dict[State, Action] = field(default_factory=dict)
+    q_table: dict = field(default_factory=dict)  # key: State or (State, history)
+    policy: dict = field(default_factory=dict)   # key: State or (State, history)
+    inertia: int = 0
     reward_history: list[float] = field(default_factory=list)
     success_history: list[bool] = field(default_factory=list)
     steps_history: list[int] = field(default_factory=list)
@@ -80,6 +81,7 @@ def q_learning_train(
     approach_bonus: float = 2.5,
     min_success_rate_for_decay: float = 0.0,
     success_window: int = 50,
+    inertia: int = 0,
 ) -> QLearningResult:
     """Train a tabular Q-learning agent.
 
@@ -124,13 +126,17 @@ def q_learning_train(
 
     rng = random.Random(seed)
 
-    q_table: dict[State, dict[Action, float]] = {}
+    inertia = max(0, int(inertia))
+    q_table: dict = {}
 
-    def get_q(s: State, a: Action) -> float:
-        return q_table.get(s, {}).get(a, 0.0)
+    def _q_key(s: State, hist: tuple) -> Any:
+        return (s, hist) if inertia > 0 else s
 
-    def set_q(s: State, a: Action, value: float) -> None:
-        q_table.setdefault(s, {})[a] = value
+    def get_q(s: State, hist: tuple, a: Action) -> float:
+        return q_table.get(_q_key(s, hist), {}).get(a, 0.0)
+
+    def set_q(s: State, hist: tuple, a: Action, value: float) -> None:
+        q_table.setdefault(_q_key(s, hist), {})[a] = value
 
     epsilon = epsilon_start
     reward_history: list[float] = []
@@ -142,6 +148,7 @@ def q_learning_train(
 
     for _ in range(episodes):
         state = env.start
+        history: tuple = ()
         episode_reward = 0.0
         success = False
         steps = 0
@@ -154,12 +161,13 @@ def q_learning_train(
             if not actions:
                 break
 
-            action = _epsilon_greedy_action(q_table, state, actions, epsilon, rng)
+            q_key = _q_key(state, history)
+            action = _epsilon_greedy_action(q_table, q_key, actions, epsilon, rng)
             next_state = env.transition(state, action)
 
             current_distance = _guidance_distance(env, state)
             next_distance = _guidance_distance(env, next_state)
-            reward = -cost_fn(state, action)
+            reward = -cost_fn.with_history(state, action, history)
             reward += progress_reward_scale * (current_distance - next_distance)
             reward -= revisit_penalty * visited_counts.get(next_state, 0)
             if next_state != env.goal and next_distance < 1e-9:
@@ -173,15 +181,18 @@ def q_learning_train(
             episode_reward += reward
             visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
 
+            new_history: tuple = (history + (action,))[-inertia:] if inertia > 0 else ()
             next_actions = _available_actions(env, next_state)
-            max_next_q = max((get_q(next_state, a2) for a2 in next_actions), default=0.0)
+            next_q_key = _q_key(next_state, new_history)
+            max_next_q = max((q_table.get(next_q_key, {}).get(a2, 0.0) for a2 in next_actions), default=0.0)
 
-            old_q = get_q(state, action)
+            old_q = get_q(state, history, action)
             target = reward + gamma * (0.0 if done else max_next_q)
             new_q = old_q + learning_rate * (target - old_q)
-            set_q(state, action, new_q)
+            set_q(state, history, action, new_q)
 
             state = next_state
+            history = new_history
             episode_path.append(next_state)
             if done:
                 break
@@ -202,10 +213,11 @@ def q_learning_train(
         if recent_rate >= min_success_rate_for_decay:
             epsilon = max(epsilon_end, epsilon * epsilon_decay)
 
-    policy = extract_policy(env, q_table)
+    policy = extract_policy(env, q_table, inertia=inertia)
     return QLearningResult(
         q_table=q_table,
         policy=policy,
+        inertia=inertia,
         reward_history=reward_history,
         success_history=success_history,
         steps_history=steps_history,
@@ -216,10 +228,35 @@ def q_learning_train(
 
 def extract_policy(
     env: RiverEnvironment,
-    q_table: dict[State, dict[Action, float]],
-) -> dict[State, Action]:
-    """Extract greedy policy from a Q-table for all reachable states."""
-    policy: dict[State, Action] = {}
+    q_table: dict,
+    inertia: int = 0,
+) -> dict:
+    """Extract greedy policy from a Q-table for all reachable states.
+
+    When ``inertia == 0`` the policy maps ``State -> Action`` (classic tabular).
+    When ``inertia > 0`` the policy maps ``(State, history_tuple) -> Action``
+    by directly extracting the best action for each key visited during training.
+    """
+    if inertia > 0:
+        policy: dict = {}
+        state_best: dict[Any, tuple[float, Action]] = {}  # best (Q, action) keyed by plain State
+        for key, action_values in q_table.items():
+            if not action_values:
+                continue
+            best_a = max(action_values, key=action_values.get)  # type: ignore[arg-type]
+            best_q = action_values[best_a]
+            policy[key] = best_a
+            # Track the overall best action per state (across all histories) for fallback.
+            s = key[0]
+            if s not in state_best or best_q > state_best[s][0]:
+                state_best[s] = (best_q, best_a)
+        # Add plain-State fallback entries so rollout can recover from unseen histories.
+        for s, (_, best_a) in state_best.items():
+            policy[s] = best_a
+        return policy
+
+    # inertia == 0: enumerate all grid states (original behaviour).
+    policy = {}
     for i in range(env.grid.nx):
         for j in range(env.grid.ny):
             s = State(i, j)
@@ -234,16 +271,23 @@ def extract_policy(
 def rollout_policy(
     env: RiverEnvironment,
     cost_fn: CostFunction,
-    policy: dict[State, Action],
+    policy: dict,
     max_steps: int | None = None,
 ) -> PlanResult:
-    """Run one deterministic inference rollout of a learned policy."""
+    """Run one deterministic inference rollout of a learned policy.
+
+    Reads ``cost_fn.inertia`` to decide whether to track action history and
+    look up the policy with ``(State, history)`` keys (inertia > 0) or plain
+    ``State`` keys (inertia == 0).
+    """
     if max_steps is None:
         max_steps = 4 * env.grid.nx * env.grid.ny
     if max_steps <= 0:
         raise ValueError("max_steps must be > 0.")
 
+    inertia: int = getattr(cost_fn, "inertia", 0)
     state = env.start
+    history: tuple = ()
     path: list[State] = [state]
     actions: list[Action] = []
     total_cost = 0.0
@@ -259,6 +303,22 @@ def rollout_policy(
                 found=True,
             )
 
+        q_key = (state, history) if inertia > 0 else state
+        action = policy.get(q_key)
+        # Fallback to state-only key when history path not in policy.
+        if action is None and inertia > 0:
+            action = policy.get(state)
+        if action is None:
+            break
+
+        next_state = env.transition(state, action)
+        total_cost += cost_fn.with_history(state, action, history)
+        actions.append(action)
+        path.append(next_state)
+        visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
+        history = (history + (action,))[-inertia:] if inertia > 0 else ()
+        state = next_state
+
         action = policy.get(state)
         if action is None:
             break
@@ -268,12 +328,6 @@ def rollout_policy(
             break
         if visited_counts.get(next_state, 0) >= 2:
             break
-
-        total_cost += cost_fn(state, action)
-        actions.append(action)
-        path.append(next_state)
-        visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
-        state = next_state
 
     return PlanResult(
         path=path,
@@ -296,6 +350,7 @@ def q_learning_from_config(
     cfg_max_steps = q_config.get("max_steps_per_episode")
     if max_steps_per_episode is None and cfg_max_steps is not None:
         max_steps_per_episode = int(cfg_max_steps)
+    inertia: int = getattr(cost_fn, "inertia", 0)
     return q_learning_train(
         env=env,
         cost_fn=cost_fn,
@@ -313,12 +368,13 @@ def q_learning_from_config(
         approach_bonus=float(q_config.get("approach_bonus", 2.5)),
         min_success_rate_for_decay=float(q_config.get("min_success_rate_for_decay", 0.0)),
         success_window=int(q_config.get("success_window", 50)),
+        inertia=inertia,
     )
 
 
 def _epsilon_greedy_action(
-    q_table: dict[State, dict[Action, float]],
-    state: State,
+    q_table: dict,
+    q_key: Any,
     actions: tuple[Action, ...],
     epsilon: float,
     rng: random.Random,
@@ -326,7 +382,7 @@ def _epsilon_greedy_action(
     if rng.random() < epsilon:
         return rng.choice(actions)
 
-    q_state = q_table.get(state, {})
+    q_state = q_table.get(q_key, {})
     best_q = max(q_state.get(a, 0.0) for a in actions)
     best_actions = [a for a in actions if q_state.get(a, 0.0) == best_q]
     return rng.choice(best_actions)

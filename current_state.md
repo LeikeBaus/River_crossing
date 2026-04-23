@@ -13,7 +13,8 @@ Implemented and working:
 - experiment runner and evaluator with JSON outputs,
 - PyQt6 UI with Run, Best path, and Compare tabs,
 - animation controls including Play, Pause, Step forward, Step reverse, and Reset,
-- interactive flow controls via direction dial, strength slider, synchronized float inputs, and an impact control.
+- interactive flow controls via flow direction radio buttons (top→bottom / bottom→top), strength slider, inertia spinbox (heading memory depth 0–5), and an impact control,
+- Gaussian flow profile parameters (sigma, floor) visible when the Gaussian environment type is selected.
 
 Still intentionally deferred:
 
@@ -29,7 +30,7 @@ Still intentionally deferred:
 The river-crossing environment currently supports:
 
 - configurable grid size,
-- constant flow vectors,
+- constant and Gaussian flow fields,
 - configurable start and goal positions,
 - a water corridor between start and goal columns,
 - land tiles outside that corridor,
@@ -37,6 +38,8 @@ The river-crossing environment currently supports:
 - diagonal-only final move into the goal.
 
 A run is only successful if the vessel reaches the goal with a diagonal final move. The start must also be left via a diagonal move.
+
+The **Gaussian** flow type models a river with a fast-lane in the centre: flow magnitude peaks at the centre column and decays horizontally towards both shores down to a configurable floor fraction. Column index (`i`) is used so that every cell in the same column shares the same flow magnitude regardless of row.
 
 ### 2.2 Cost Model
 
@@ -46,7 +49,13 @@ $$
 c(s,a) = \alpha \cdot t(s,a) + \beta \cdot E(s,a)
 $$
 
-with Euclidean time cost and flow-dependent energy cost.
+with Euclidean time cost and flow-dependent energy cost. When inertia > 0 a turn-cost term is added:
+
+$$
+c(s, a, \text{hist}) = \alpha \cdot t(s,a) + \beta \cdot E(s,a) + \text{turn\_penalty} \cdot \frac{1 - \cos\theta}{2}
+$$
+
+where $\cos\theta$ is the cosine of the angle between the averaged recent heading (history) and the current action.
 
 ### 2.3 Algorithm State
 
@@ -97,8 +106,10 @@ The current PyQt6 UI includes:
 - Local 3x3 neighborhood panel with per-action costs,
 - status log,
 - PNG export,
-- flow vector visualization with arrows,
-- flow controls with bidirectional synchronization,
+- flow vector visualization with arrows (magnitude reflects Gaussian profile when applicable),
+- flow direction radio buttons (top→bottom / bottom→top),
+- inertia spinbox (heading memory depth, 0–5),
+- Gaussian profile controls (sigma, floor) shown when the Gaussian environment type is selected,
 - toolbar-based actions for Run Single Experiment, Run Experiment Batch, Show Results, and Compare,
 - Reset behavior returning the animation to frame 1.
 

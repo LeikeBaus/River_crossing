@@ -81,6 +81,41 @@ class FlowEnergyCost(EnergyCost):
         return math.sqrt(parallel_residual * parallel_residual + perp_sq)
 
 
+class TurnCost:
+    """Penalty for changing heading, proportional to ``(1 - cos θ) / 2``.
+
+    The reference heading is the component-wise average of the last *N*
+    actions in *history* (where N = ``inertia``).  This gives:
+
+    * 0.0  for continuing straight (θ = 0°)
+    * 0.5  for a 90° turn
+    * 1.0  for a 180° reversal
+
+    Parameters
+    ----------
+    turn_penalty:
+        Overall scaling factor applied to the (1 - cos θ) / 2 value.
+    """
+
+    def __init__(self, turn_penalty: float) -> None:
+        self._penalty = turn_penalty
+
+    def __call__(self, history: "tuple[Action, ...]", action: "Action") -> float:
+        """Return the turn cost given recent action *history* and current *action*."""
+        if not history:
+            return 0.0
+        n = len(history)
+        avg_i = sum(a[0] for a in history) / n
+        avg_j = sum(a[1] for a in history) / n
+        mag_h = math.sqrt(avg_i * avg_i + avg_j * avg_j)
+        di, dj = action
+        mag_a = math.sqrt(di * di + dj * dj)
+        if mag_h < 1e-9 or mag_a < 1e-9:
+            return 0.0
+        cos_t = max(-1.0, min(1.0, (di * avg_i + dj * avg_j) / (mag_a * mag_h)))
+        return self._penalty * (1.0 - cos_t) / 2.0
+
+
 # ---------------------------------------------------------------------------
 # Combined cost function
 # ---------------------------------------------------------------------------
@@ -101,6 +136,11 @@ class CostFunction:
         A :class:`TimeCost` instance.
     energy_cost:
         An :class:`EnergyCost` instance.
+    turn_cost:
+        Optional :class:`TurnCost` instance.  ``None`` disables turn penalty.
+    inertia:
+        Number of past actions whose average forms the reference heading.
+        0 = no memory (turn cost always 0), 1 = previous step only, etc.
     """
 
     def __init__(
@@ -109,6 +149,8 @@ class CostFunction:
         beta: float,
         time_cost: TimeCost,
         energy_cost: EnergyCost,
+        turn_cost: TurnCost | None = None,
+        inertia: int = 0,
     ) -> None:
         if alpha < 0:
             raise ValueError(f"alpha must be >= 0, got {alpha}.")
@@ -116,14 +158,28 @@ class CostFunction:
             raise ValueError(f"beta must be >= 0, got {beta}.")
         self.alpha = alpha
         self.beta = beta
+        self.inertia = max(0, int(inertia))
         self._time_cost = time_cost
         self._energy_cost = energy_cost
+        self._turn_cost: TurnCost = turn_cost if turn_cost is not None else TurnCost(0.0)
 
     def __call__(self, state: State, action: Action) -> float:
-        """Return ``alpha * t(s, a) + beta * E(s, a)``."""
+        """Return ``alpha * t(s, a) + beta * E(s, a)`` (no turn cost; history-free)."""
         t = self._time_cost(state, action)
         e = self._energy_cost(state, action)
         return self.alpha * t + self.beta * e
+
+    def with_history(
+        self,
+        state: State,
+        action: Action,
+        history: "tuple[Action, ...]",
+    ) -> float:
+        """Return the full cost including the turn-cost term.
+
+        ``c(s, a, hist) = alpha * t(s,a) + beta * E(s,a) + turn(hist, a)``
+        """
+        return self(state, action) + self._turn_cost(history, action)
 
     def time(self, state: State, action: Action) -> float:
         """Return the raw time component ``t(s, a)`` (unweighted)."""
@@ -132,6 +188,10 @@ class CostFunction:
     def energy(self, state: State, action: Action) -> float:
         """Return the raw energy component ``E(s, a)`` (unweighted)."""
         return self._energy_cost(state, action)
+
+    def turn(self, history: "tuple[Action, ...]", action: Action) -> float:
+        """Return the raw turn cost ``T(hist, a)`` (unweighted)."""
+        return self._turn_cost(history, action)
 
     @classmethod
     def from_config(cls, algo_config: dict[str, Any], flow: FlowField) -> CostFunction:
@@ -147,11 +207,16 @@ class CostFunction:
         common = algo_config.get("common", {})
         alpha = float(common.get("alpha", 1.0))
         beta = float(common.get("beta", 0.0))
+        inertia = max(0, int(common.get("inertia", 0)))
+        turn_penalty = float(common.get("turn_penalty", 1.0))
+        turn_cost = TurnCost(turn_penalty) if inertia > 0 and turn_penalty > 0.0 else None
         return cls(
             alpha=alpha,
             beta=beta,
             time_cost=EuclideanTimeCost(),
             energy_cost=FlowEnergyCost(flow),
+            turn_cost=turn_cost,
+            inertia=inertia,
         )
 
     def __repr__(self) -> str:

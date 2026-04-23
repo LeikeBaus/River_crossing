@@ -28,6 +28,14 @@ Im einfachsten Fall ist die Strömung konstant:
 
 u_flow(s) = u₀ für alle s ∈ S
 
+Alternativ steht ein Gauß'sches Strömungsmodell zur Verfügung, bei dem die Strömungsstärke horizontale Abhängigkeit von der Spalte (i) hat:
+
+m(i) = floor + (1 − floor) · exp(−0.5 · ((i − i_c) / σ)²)
+
+u_flow(s) = m(s.i) · u₀
+
+Somit teilen alle Zellen derselben Spalte dieselbe Strömungsstärke; die schnellste Zone verläuft als vertikaler Streifen durch die Mitte.
+
 ### 2.2 Aktionsraum
 
 Das Schiff bewegt sich in einem 8-Nachbarschaftsmodell.
@@ -63,9 +71,14 @@ Allgemeine Form:
 
 c(s, a) = α · t(s, a) + β · E(s, a)
 
+Bei aktiviertem Trägheitsspeicher (inertia > 0) kommt ein Drehkostenterm hinzu:
+
+c(s, a, hist) = α · t(s, a) + β · E(s, a) + K_turn · (1 − cos θ) / 2
+
 mit
 
-α, β ∈ ℝ_{≥0}
+α, β, K_turn ∈ ℝ_{≥0}
+θ = Winkel zwischen gemitteltem Heading (hist) und aktueller Aktion
 
 t(s, a) = Zeitkosten
 E(s, a) = Energieverbrauch
@@ -187,7 +200,7 @@ Die diskrete Aktion wird entlang des negativen Gradienten gewählt und um eine Z
 
 ### 4.6 Reinforcement Learning – Q-Learning
 
-Q-Learning approximiert die optimale Aktionswertfunktion Q* weiterhin tabellarisch, verwendet inzwischen aber eine **Reward-Shaping-Strategie**, damit sich eine stabile Andockpolitik schneller ausbildet.
+Q-Learning approximiert die optimale Aktionswertfunktion Q* weiterhin tabellarisch, verwendet inzwischen aber eine **Reward-Shaping-Strategie**, damit sich eine stabile Andockpolitik schneller ausbildet. Bei aktiviertem Trägheitsspeicher (inertia > 0) werden Q-Tabellen-Einträge mit Schlüsseln `(s, history_tuple)` gespeichert.
 
 Update-Regel:
 
@@ -249,6 +262,7 @@ river-crossing/
 │
 ├── configs/
 │   ├── env.yaml
+│   ├── env_constant.yaml
 │   ├── algorithm.yaml
 │   └── experiment.yaml
 │
@@ -280,8 +294,9 @@ Alle variablen Parameter werden ausschließlich über Konfigurationsdateien defi
 
 Beispiele:
 - Gittergröße (N_x, N_y)
-- Strömungsmodell und Strömungsvektor
-- Gewichtungsparameter α, β
+- Strömungsmodell und Strömungsvektor (`constant` oder `gaussian`)
+- Gauß'sche Profilparameter (`sigma`, `floor`)
+- Gewichtungsparameter α, β sowie Trägheitsparameter (`inertia`, `turn_penalty`)
 - APF-Parameter (`k_att`, `lambda_flow`)
 - RL-Parameter (α, γ, ε sowie Reward-Shaping)
 - Anzahl Episoden
@@ -305,10 +320,11 @@ Zusätzlich umfasst die UI:
 - Strömungsvektoren mit Pfeildarstellung,
 - Start- und Zielpunkt,
 - Animation mit Play, Pause, Step forward, Step reverse und Reset,
-- Flow-Steuerung über einen QDial für die Richtung,
+- Flow-Steuerung über Radiobuttons für die Richtung (↓ Top → Bottom / ↑ Bottom → Top),
 - einen Slider für die Strömungsstärke,
-- drei synchronisierte Float-Eingabefelder für x-Richtung, y-Richtung und Stärke,
+- Gauß-Profilregler (Sigma, Floor) bei Auswahl des Gauß'schen Strömungstyps,
 - eine zusätzliche **Impact**-Steuerung in Prozent, die intern auf den Gewichtungsparameter β der Kostenfunktion abgebildet wird,
+- ein **Inertia**-Spinbox (0–5) zur Steuerung des Heading-Speichers,
 - ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
 
 Im Run-Tab werden Entscheidungsoptionen farblich hervorgehoben:

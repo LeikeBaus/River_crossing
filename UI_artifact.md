@@ -25,7 +25,10 @@ The application supports:
 - resetting the animation to frame 1,
 - comparing best paths across algorithms,
 - inspecting run creation step by step,
-- interactively changing the displayed flow vector,
+- interactively changing the flow direction via radio buttons (top→bottom / bottom→top),
+- interactively changing the flow strength via slider,
+- interactively changing Gaussian flow profile parameters (sigma and floor) when the Gaussian environment type is selected,
+- interactively changing heading memory depth via the inertia spinbox (0–5),
 - interactively changing flow impact in percent,
 - inspecting a Local 3x3 neighborhood with action costs.
 
@@ -45,11 +48,11 @@ The application supports:
 - Algorithm selector
 - Seed selector
 - Animation speed control
-- Flow direction dial
+- Inertia spinbox (0–5)
+- Flow direction radio buttons (↓ Top → Bottom / ↑ Bottom → Top)
 - Flow strength slider
-- Flow x input
-- Flow y input
-- Flow strength input
+- Flow sigma spinbox (visible for Gaussian environment only)
+- Flow floor spinbox (visible for Gaussian environment only)
 - Impact spinbox
 - Show flow checkbox
 - Show labels checkbox
@@ -62,15 +65,13 @@ The application supports:
 ### 4.3 Flow Controls
 The flow section contains:
 
-- a QDial for choosing direction,
-- a horizontal slider for flow strength,
-- three synchronized float line edits for:
-  - x-direction,
-  - y-direction,
-  - strength.
+- two QRadioButton controls for flow direction:
+  - ↓ Top → Bottom (flow vector (0, +1)),
+  - ↑ Bottom → Top (flow vector (0, −1)).
+- a horizontal slider for flow strength (scales the direction vector magnitude).
+- a QDoubleSpinBox for Gaussian sigma (width of the fast-lane profile in columns), visible only when the environment type is "gaussian".
+- a QDoubleSpinBox for Gaussian floor (minimum flow fraction at the shores), visible only when the environment type is "gaussian".
 - an impact spinbox displayed as 0% to 100%, mapped internally to the float parameter β.
-
-All controls update each other bidirectionally.
 
 ### 4.4 Center Tabs
 The center panel contains three tabs:
@@ -136,8 +137,10 @@ The current UI artifact is considered achieved when:
 1. the application launches from the command line,
 2. the three tabs are visible as Run, Best path, and Compare,
 3. Reset returns the visualization to frame 1,
-4. flow controls stay synchronized,
+4. flow direction radio buttons switch the flow vector between top→bottom and bottom→top,
 5. impact is shown in percent and applied internally as β,
 6. Compare uses best-path data,
 7. the Run tab shows action coloring,
-8. the Local 3x3 panel reflects local action costs.
+8. the Local 3x3 panel reflects local action costs,
+9. the inertia spinbox updates the heading-memory depth used by all compatible algorithms,
+10. Gaussian profile controls (sigma, floor) appear only when the Gaussian environment type is selected.

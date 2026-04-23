@@ -72,14 +72,21 @@ def dijkstra(
         Optimal path, actions, total cost and search statistics.
         ``found=False`` when no valid path exists.
     """
-    # Priority queue entries: (accumulated_cost, tie_breaker, state)
+    # Priority queue entries: (accumulated_cost, tie_breaker, state, history_tuple)
+    # history_tuple = last `inertia` actions taken; () when inertia == 0.
+    inertia: int = getattr(cost_fn, "inertia", 0)
     start = env.start
-    dist: dict[State, float] = {start: 0.0}
-    # predecessor map: state → (previous_state, action_taken)
-    prev: dict[State, tuple[State, Action]] = {}
+    start_hist: tuple = ()
+    start_node = (start, start_hist)
+
+    # Distance map keyed by (state, history_tuple).
+    dist: dict[tuple, float] = {start_node: 0.0}
+    # Predecessor map: node → (parent_node, action_taken)
+    prev: dict[tuple, tuple] = {}
 
     counter = 0  # tie-breaker for heap stability
-    heap: list[tuple[float, int, State]] = [(0.0, counter, start)]
+    # Heap entry: (cost, counter, state, history) – counter ensures State is never compared.
+    heap: list[tuple] = [(0.0, counter, start, start_hist)]
 
     nodes_expanded = 0
     exploration_path: list[list[State]] = []
@@ -87,20 +94,21 @@ def dijkstra(
     goal = env.goal
 
     while heap:
-        g, _, state = heapq.heappop(heap)
+        g, _, state, history = heapq.heappop(heap)
+        node = (state, history)
 
         # Skip stale entries
-        if g > dist.get(state, float("inf")):
+        if g > dist.get(node, float("inf")):
             continue
 
         nodes_expanded += 1
 
         # Reconstruct partial path from start to this expansion frontier.
         snapshot: list[State] = []
-        cur = state
-        while cur in prev:
-            snapshot.append(cur)
-            cur, _ = prev[cur]
+        cur_node = node
+        while cur_node in prev:
+            snapshot.append(cur_node[0])
+            cur_node, _ = prev[cur_node]
         snapshot.append(start)
         snapshot.reverse()
         exploration_path.append(snapshot)
@@ -109,36 +117,41 @@ def dijkstra(
             next_state = env.transition(state, action)
 
             # The goal cell is only reachable via a valid approach angle.
-            # Transitions that arrive at the goal with an invalid angle are
-            # discarded so that dist[goal] always reflects a valid docking.
             if next_state == goal and not env.is_goal(next_state, action):
                 continue
 
-            edge_cost = cost_fn(state, action)
+            edge_cost = cost_fn.with_history(state, action, history)
             new_g = g + edge_cost
 
-            if new_g < dist.get(next_state, float("inf")):
-                dist[next_state] = new_g
-                prev[next_state] = (state, action)
-                counter += 1
-                heapq.heappush(heap, (new_g, counter, next_state))
+            new_history: tuple = (history + (action,))[-inertia:] if inertia > 0 else ()
+            next_node = (next_state, new_history)
 
-    if goal not in dist:
+            if new_g < dist.get(next_node, float("inf")):
+                dist[next_node] = new_g
+                prev[next_node] = (node, action)
+                counter += 1
+                heapq.heappush(heap, (new_g, counter, next_state, new_history))
+
+    # Find the cheapest arrival tuple at goal (across all possible histories).
+    goal_arrivals = [(d, n) for n, d in dist.items() if n[0] == goal]
+    if not goal_arrivals:
         return PlanResult(
             nodes_expanded=nodes_expanded,
             found=False,
             exploration_path=exploration_path,
         )
 
+    _, best_goal_node = min(goal_arrivals)
+
     # Reconstruct path
     path: list[State] = []
     actions: list[Action] = []
-    current = goal
-    while current in prev:
-        pre, act = prev[current]
-        path.append(current)
+    cur_node = best_goal_node
+    while cur_node in prev:
+        pre_node, act = prev[cur_node]
+        path.append(cur_node[0])
         actions.append(act)
-        current = pre
+        cur_node = pre_node
     path.append(start)
     path.reverse()
     actions.reverse()
@@ -146,7 +159,7 @@ def dijkstra(
     return PlanResult(
         path=path,
         actions=actions,
-        total_cost=dist[goal],
+        total_cost=dist[best_goal_node],
         nodes_expanded=nodes_expanded,
         found=True,
         exploration_path=exploration_path,

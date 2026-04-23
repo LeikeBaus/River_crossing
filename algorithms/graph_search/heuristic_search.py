@@ -55,44 +55,49 @@ def weighted_astar(
     if weight < 1.0:
         raise ValueError(f"weight must be >= 1, got {weight}.")
 
+    inertia: int = getattr(cost_fn, "inertia", 0)
     start = env.start
     goal = env.goal
 
-    g_score: dict[State, float] = {start: 0.0}
-    prev: dict[State, tuple[State, Action]] = {}
+    start_hist: tuple = ()
+    start_node = (start, start_hist)
+
+    g_score: dict[tuple, float] = {start_node: 0.0}
+    prev: dict[tuple, tuple] = {}
 
     # For admissibility with mixed costs, scale euclidean distance by alpha.
-    # Since E(s,a) >= 0, alpha * distance is a lower bound whenever alpha >= 0.
     heuristic_scale = max(0.0, getattr(cost_fn, "alpha", 1.0))
 
     counter = 0
     start_h = _heuristic(start, goal, heuristic, heuristic_scale)
-    heap: list[tuple[float, float, int, State]] = [(start_h, 0.0, counter, start)]
+    # Heap entry: (f, g, counter, state, history) – counter ensures State is never compared.
+    heap: list[tuple] = [(start_h, 0.0, counter, start, start_hist)]
 
     nodes_expanded = 0
     exploration_path: list[list[State]] = []
 
     while heap:
-        f_curr, g_curr, _, state = heapq.heappop(heap)
+        f_curr, g_curr, _, state, history = heapq.heappop(heap)
+        node = (state, history)
 
         # Skip stale queue entries.
-        if g_curr > g_score.get(state, float("inf")):
+        if g_curr > g_score.get(node, float("inf")):
             continue
 
         nodes_expanded += 1
 
         # Record partial path snapshot from start to this expansion frontier.
         snapshot: list[State] = []
-        cur = state
-        while cur in prev:
-            snapshot.append(cur)
-            cur, _ = prev[cur]
+        cur_node = node
+        while cur_node in prev:
+            snapshot.append(cur_node[0])
+            cur_node, _ = prev[cur_node]
         snapshot.append(start)
         snapshot.reverse()
         exploration_path.append(snapshot)
 
         if state == goal:
-            return _reconstruct_result(start, goal, prev, g_score[goal], nodes_expanded, exploration_path)
+            return _reconstruct_result_hist(start, node, prev, g_score[node], nodes_expanded, exploration_path)
 
         for action in env.valid_actions(state):
             next_state = env.transition(state, action)
@@ -100,16 +105,19 @@ def weighted_astar(
             if next_state == goal and not env.is_goal(next_state, action):
                 continue
 
-            tentative_g = g_curr + cost_fn(state, action)
-            if tentative_g < g_score.get(next_state, float("inf")):
-                g_score[next_state] = tentative_g
-                prev[next_state] = (state, action)
+            tentative_g = g_curr + cost_fn.with_history(state, action, history)
+            new_history: tuple = (history + (action,))[-inertia:] if inertia > 0 else ()
+            next_node = (next_state, new_history)
+
+            if tentative_g < g_score.get(next_node, float("inf")):
+                g_score[next_node] = tentative_g
+                prev[next_node] = (node, action)
 
                 h = _heuristic(next_state, goal, heuristic, heuristic_scale)
                 counter += 1
                 heapq.heappush(
                     heap,
-                    (tentative_g + weight * h, tentative_g, counter, next_state),
+                    (tentative_g + weight * h, tentative_g, counter, next_state, new_history),
                 )
 
     return PlanResult(nodes_expanded=nodes_expanded, found=False, exploration_path=exploration_path)
@@ -161,6 +169,39 @@ def _heuristic(
     if heuristic == "euclidean":
         return scale * math.hypot(goal.i - state.i, goal.j - state.j)
     raise ValueError(f"Unknown heuristic: {heuristic!r}")
+
+
+def _reconstruct_result_hist(
+    start: State,
+    goal_node: tuple,
+    prev: dict[tuple, tuple],
+    total_cost: float,
+    nodes_expanded: int,
+    exploration_path: list[list[State]] | None = None,
+) -> PlanResult:
+    """Reconstruct a PlanResult from history-augmented predecessor map."""
+    path: list[State] = []
+    actions: list[Action] = []
+    cur_node = goal_node
+
+    while cur_node in prev:
+        pre_node, act = prev[cur_node]
+        path.append(cur_node[0])
+        actions.append(act)
+        cur_node = pre_node
+
+    path.append(start)
+    path.reverse()
+    actions.reverse()
+
+    return PlanResult(
+        path=path,
+        actions=actions,
+        total_cost=total_cost,
+        nodes_expanded=nodes_expanded,
+        found=True,
+        exploration_path=exploration_path or [],
+    )
 
 
 def _reconstruct_result(

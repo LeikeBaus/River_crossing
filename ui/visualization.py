@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDial,
     QDockWidget,
     QDoubleSpinBox,
     QFileDialog,
@@ -26,8 +26,10 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QRadioButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
     QStatusBar,
     QTabWidget,
     QToolBar,
@@ -52,8 +54,11 @@ class UISelectionState:
     show_flow: bool
     show_labels: bool
     speed: float
-    flow_vector: tuple[float, float] = (1.0, 0.0)
+    flow_vector: tuple[float, float] = (0.0, 1.0)
+    flow_sigma: float = 5.0
+    flow_floor: float = 0.1
     impact: float = 0.0
+    inertia: int = 2
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,7 @@ class SimulationWorker(QObject):
                 exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
                 seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
                 runs: list[dict] = []
+                flow_cfg = self._build_flow_config_override(self.selection)
                 for idx, seed in enumerate(seeds):
                     self.message.emit(f"Running seed {seed} ({idx + 1}/{len(seeds)})...")
                     record = run_single_experiment(
@@ -298,8 +304,9 @@ class SimulationWorker(QObject):
                         algorithm=self.selection.algorithm,
                         seed=seed,
                         config_dir=self.config_dir,
-                        flow_vector_override=self.selection.flow_vector,
+                        flow_config_override=flow_cfg,
                         impact_override=self.selection.impact,
+                        inertia_override=self.selection.inertia,
                     )
                     runs.append(record.to_dict())
                     self.progress.emit(int(15 + 85 * (idx + 1) / len(seeds)))
@@ -312,11 +319,13 @@ class SimulationWorker(QObject):
 
             if self.mode == "run_batch_experiment":
                 self.message.emit("Running experiment batch and evaluation...")
+                flow_cfg = self._build_flow_config_override(self.selection)
                 records = run_all_experiments(
                     config_dir=self.config_dir,
                     output_path=self.results_path,
-                    flow_vector_override=self.selection.flow_vector,
+                    flow_config_override=flow_cfg,
                     impact_override=self.selection.impact,
+                    inertia_override=self.selection.inertia,
                 )
                 summary_path = self.results_path.parent / "evaluation_summary.json"
                 evaluate_results(records, output_path=summary_path)
@@ -358,6 +367,19 @@ class SimulationWorker(QObject):
         finally:
             self.finished.emit()
 
+    @staticmethod
+    def _build_flow_config_override(selection: UISelectionState) -> dict:
+        """Build a flow configuration dict from the current UI selection state."""
+        vi, vj = selection.flow_vector
+        cfg: dict = {
+            "type": selection.environment,
+            "vector": [vi, vj],
+        }
+        if selection.environment == "gaussian":
+            cfg["sigma"] = selection.flow_sigma
+            cfg["floor"] = selection.flow_floor
+        return cfg
+
 
 class GridCanvas(QGraphicsView):
     def __init__(self, title: str, nx: int = 40, ny: int = 20, minimum_width: int = 540) -> None:
@@ -376,7 +398,7 @@ class GridCanvas(QGraphicsView):
             start=(2, min(10, self._ny - 1)),
             goal=(min(37, self._nx - 1), min(10, self._ny - 1)),
             path=[],
-            flow_vector=(1.0, 0.0),
+            flow_fn=lambda i, j: (0.0, 1.0),
             show_flow=True,
             show_labels=False,
             title_suffix="placeholder",
@@ -391,7 +413,7 @@ class GridCanvas(QGraphicsView):
         start: tuple[int, int],
         goal: tuple[int, int],
         path: list[tuple[int, int]],
-        flow_vector: tuple[float, float],
+        flow_fn: Callable[[int, int], tuple[float, float]],
         show_flow: bool,
         show_labels: bool,
         title_suffix: str,
@@ -415,7 +437,7 @@ class GridCanvas(QGraphicsView):
                 )
 
         if show_flow:
-            self._draw_flow(flow_vector, start, goal)
+            self._draw_flow(flow_fn, start, goal)
 
         if overlay_state is not None and action_overlay is not None:
             self._draw_action_overlay(overlay_state, action_overlay)
@@ -559,14 +581,10 @@ class GridCanvas(QGraphicsView):
 
     def _draw_flow(
         self,
-        flow_vector: tuple[float, float],
+        flow_fn: Callable[[int, int], tuple[float, float]],
         start: tuple[int, int],
         goal: tuple[int, int],
     ) -> None:
-        vi, vj = flow_vector
-        if abs(vi) + abs(vj) == 0.0:
-            return
-
         step = 1 if self._nx * self._ny <= 1500 else 2
         flow_pen = QPen(QColor("#94A3B8"))
         flow_pen.setWidthF(1.0)
@@ -578,6 +596,9 @@ class GridCanvas(QGraphicsView):
             if i < start[0] or i > goal[0]:
                 continue
             for j in range(0, self._ny, step):
+                vi, vj = flow_fn(i, j)
+                if abs(vi) + abs(vj) == 0.0:
+                    continue
                 cx, cy = self._cell_center(i, j)
                 ex = cx + vi * scale
                 ey = cy - vj * scale
@@ -636,7 +657,7 @@ class CompareView(QWidget):
         self,
         start: tuple[int, int],
         goal: tuple[int, int],
-        flow_vector: tuple[float, float],
+        flow_fn: Callable[[int, int], tuple[float, float]],
         show_flow: bool,
         show_labels: bool,
         frame_index: int,
@@ -647,7 +668,7 @@ class CompareView(QWidget):
                 start=start,
                 goal=goal,
                 path=visible_path,
-                flow_vector=flow_vector,
+                flow_fn=flow_fn,
                 show_flow=show_flow,
                 show_labels=show_labels,
                 title_suffix=f"{run.title} | frame={len(visible_path)}/{len(run.path)}",
@@ -670,7 +691,7 @@ class ControlPanel(QWidget):
         self._updating_flow_controls = False
 
         self.environment_combo = QComboBox()
-        self.environment_combo.addItems(["baseline"])
+        self.environment_combo.addItems(["gaussian", "constant"])
 
         self.algorithm_combo = QComboBox()
         self.algorithm_combo.addItems([
@@ -697,26 +718,60 @@ class ControlPanel(QWidget):
         self.speed.setValue(1.0)
         self.speed.setSuffix("x")
 
-        self.flow_direction_dial = QDial()
-        self.flow_direction_dial.setRange(0, 359)
-        self.flow_direction_dial.setWrapping(True)
-        self.flow_direction_dial.setNotchesVisible(True)
+        self.inertia_spin = QSpinBox()
+        self.inertia_spin.setRange(0, 5)
+        self.inertia_spin.setValue(2)
+        self.inertia_spin.setToolTip(
+            "Number of past steps that form the reference heading for turn cost.\n"
+            "0 = no turn penalty, 1 = only last step, 5 = last 5 steps (more arc-like paths)."
+        )
+
+        # Flow direction: top→bottom (vj<0) or bottom→top (vj>0)
+        self.flow_dir_down = QRadioButton("↓  Top → Bottom")
+        self.flow_dir_up = QRadioButton("↑  Bottom → Top")
+        self.flow_dir_up.setChecked(True)
 
         self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
-        self.flow_strength_slider.setRange(0, 100)
+        self.flow_strength_slider.setRange(0, 200)
         self.flow_strength_slider.setValue(100)
 
-        self.flow_x_edit = QLineEdit("1.000")
-        self.flow_y_edit = QLineEdit("0.000")
         self.flow_strength_edit = QLineEdit("1.000")
+        self.flow_strength_edit.setMaximumWidth(100)
+
+        # Gaussian-only parameters
+        self.flow_sigma_spin = QDoubleSpinBox()
+        self.flow_sigma_spin.setRange(0.5, 20.0)
+        self.flow_sigma_spin.setSingleStep(0.5)
+        self.flow_sigma_spin.setValue(5.0)
+        self.flow_sigma_spin.setToolTip(
+            "Gaussian width σ in grid cells.\n"
+            "Small σ → narrow fast channel; large σ → nearly uniform flow."
+        )
+
+        self.flow_floor_spin = QDoubleSpinBox()
+        self.flow_floor_spin.setRange(1.0, 50.0)
+        self.flow_floor_spin.setSingleStep(1.0)
+        self.flow_floor_spin.setValue(10.0)
+        self.flow_floor_spin.setSuffix("%")
+        self.flow_floor_spin.setToolTip(
+            "Minimum flow fraction at the shore edges (prevents zero flow).\n"
+            "10 % = flow at shore is 10 % of peak channel speed."
+        )
+
+        # Gaussian-parameter container (show/hide together)
+        self._gaussian_params_widget = QWidget()
+        gaussian_form = QFormLayout(self._gaussian_params_widget)
+        gaussian_form.setContentsMargins(0, 0, 0, 0)
+        gaussian_form.addRow("σ (sigma)", self.flow_sigma_spin)
+        gaussian_form.addRow("Floor %", self.flow_floor_spin)
+
         self.flow_impact_spin = QDoubleSpinBox()
         self.flow_impact_spin.setRange(0.0, 100.0)
         self.flow_impact_spin.setSingleStep(1.0)
         self.flow_impact_spin.setDecimals(0)
         self.flow_impact_spin.setSuffix("%")
         self.flow_impact_spin.setValue(max(0.0, min(100.0, float(initial_impact) * 100.0)))
-        for widget in (self.flow_x_edit, self.flow_y_edit, self.flow_strength_edit, self.flow_impact_spin):
-            widget.setMaximumWidth(100)
+        self.flow_impact_spin.setMaximumWidth(100)
 
         self.play_button = QPushButton("Play")
         self.pause_button = QPushButton("Pause")
@@ -733,33 +788,44 @@ class ControlPanel(QWidget):
         self.show_flow.stateChanged.connect(lambda _: self.redraw_requested.emit())
         self.show_labels.stateChanged.connect(lambda _: self.redraw_requested.emit())
         self.speed.valueChanged.connect(lambda _: self.redraw_requested.emit())
+        self.inertia_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
 
-        self.flow_direction_dial.valueChanged.connect(self._on_flow_direction_changed)
+        self.flow_dir_down.toggled.connect(lambda _: self.redraw_requested.emit())
+        self.flow_dir_up.toggled.connect(lambda _: self.redraw_requested.emit())
         self.flow_strength_slider.valueChanged.connect(self._on_flow_strength_changed)
-        self.flow_x_edit.editingFinished.connect(self._on_vector_line_edits_changed)
-        self.flow_y_edit.editingFinished.connect(self._on_vector_line_edits_changed)
         self.flow_strength_edit.editingFinished.connect(self._on_strength_line_edit_changed)
         self.flow_impact_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
+        self.flow_sigma_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
+        self.flow_floor_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
+        self.environment_combo.currentTextChanged.connect(self._on_environment_changed)
 
+        # ── Layout ──────────────────────────────────────────────────────────
         layout = QVBoxLayout(self)
         form = QFormLayout()
         form.addRow("Environment", self.environment_combo)
         form.addRow("Algorithm", self.algorithm_combo)
         form.addRow("Seed", self.seed_combo)
         form.addRow("Animation speed", self.speed)
+        form.addRow("Inertia", self.inertia_spin)
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Flow direction"))
-        layout.addWidget(self.flow_direction_dial)
+        dir_layout = QHBoxLayout()
+        dir_layout.addWidget(self.flow_dir_down)
+        dir_layout.addWidget(self.flow_dir_up)
+        layout.addLayout(dir_layout)
+
         layout.addWidget(QLabel("Flow strength"))
         layout.addWidget(self.flow_strength_slider)
 
         flow_values = QFormLayout()
-        flow_values.addRow("flow x", self.flow_x_edit)
-        flow_values.addRow("flow y", self.flow_y_edit)
         flow_values.addRow("strength", self.flow_strength_edit)
-        flow_values.addRow("impact", self.flow_impact_spin)
         layout.addLayout(flow_values)
+        layout.addWidget(self._gaussian_params_widget)
+
+        impact_form = QFormLayout()
+        impact_form.addRow("impact", self.flow_impact_spin)
+        layout.addLayout(impact_form)
 
         layout.addWidget(self.show_flow)
         layout.addWidget(self.show_labels)
@@ -770,51 +836,46 @@ class ControlPanel(QWidget):
         layout.addWidget(self.reset_button)
         layout.addStretch(1)
 
-        self.set_flow_vector(1.0, 0.0)
+        # Set initial gaussian params visibility based on default env selection.
+        self._on_environment_changed(self.environment_combo.currentText())
 
-    def set_flow_vector(self, vi: float, vj: float) -> None:
+    def _on_environment_changed(self, env_name: str) -> None:
+        """Show/hide Gaussian-specific parameters based on the environment selection."""
+        self._gaussian_params_widget.setVisible(env_name == "gaussian")
+        self.redraw_requested.emit()
+
+    def set_flow_from_config(self, flow_cfg: dict) -> None:
+        """Initialise flow controls from a flow configuration dict."""
         self._updating_flow_controls = True
-        angle, strength = vector_to_angle_strength(vi, vj)
-        self.flow_direction_dial.setValue(int(round(math_to_dial_angle(angle))) % 360)
+        vec = flow_cfg.get("vector", [0.0, 1.0])
+        vi, vj = float(vec[0]), float(vec[1])
+        strength = math.hypot(vi, vj)
+
+        if vj < 0:
+            self.flow_dir_down.setChecked(True)
+        else:
+            self.flow_dir_up.setChecked(True)
+
         self.flow_strength_slider.setValue(int(round(strength * 100.0)))
-        self.flow_x_edit.setText(f"{float(vi):.3f}")
-        self.flow_y_edit.setText(f"{float(vj):.3f}")
         self.flow_strength_edit.setText(f"{strength:.3f}")
+
+        sigma = float(flow_cfg.get("sigma", 5.0))
+        floor_pct = float(flow_cfg.get("floor", 0.1)) * 100.0
+        self.flow_sigma_spin.setValue(sigma)
+        self.flow_floor_spin.setValue(floor_pct)
         self._updating_flow_controls = False
 
     def flow_vector(self) -> tuple[float, float]:
-        try:
-            return (float(self.flow_x_edit.text()), float(self.flow_y_edit.text()))
-        except ValueError:
-            return (1.0, 0.0)
-
-    def _on_flow_direction_changed(self, value: int) -> None:
-        if self._updating_flow_controls:
-            return
         strength = self.flow_strength_slider.value() / 100.0
-        vi, vj = angle_strength_to_vector(dial_to_math_angle(float(value)), strength)
-        self.set_flow_vector(vi, vj)
-        self.redraw_requested.emit()
+        vj = -strength if self.flow_dir_down.isChecked() else strength
+        return (0.0, vj)
 
     def _on_flow_strength_changed(self, value: int) -> None:
         if self._updating_flow_controls:
             return
-        vi, vj = angle_strength_to_vector(
-            dial_to_math_angle(float(self.flow_direction_dial.value())),
-            value / 100.0,
-        )
-        self.set_flow_vector(vi, vj)
-        self.redraw_requested.emit()
-
-    def _on_vector_line_edits_changed(self) -> None:
-        if self._updating_flow_controls:
-            return
-        try:
-            vi = float(self.flow_x_edit.text())
-            vj = float(self.flow_y_edit.text())
-        except ValueError:
-            return
-        self.set_flow_vector(vi, vj)
+        self._updating_flow_controls = True
+        self.flow_strength_edit.setText(f"{value / 100.0:.3f}")
+        self._updating_flow_controls = False
         self.redraw_requested.emit()
 
     def _on_strength_line_edit_changed(self) -> None:
@@ -824,11 +885,10 @@ class ControlPanel(QWidget):
             strength = max(0.0, float(self.flow_strength_edit.text()))
         except ValueError:
             return
-        vi, vj = angle_strength_to_vector(
-            dial_to_math_angle(float(self.flow_direction_dial.value())),
-            strength,
-        )
-        self.set_flow_vector(vi, vj)
+        self._updating_flow_controls = True
+        self.flow_strength_slider.setValue(int(round(strength * 100.0)))
+        self.flow_strength_edit.setText(f"{strength:.3f}")
+        self._updating_flow_controls = False
         self.redraw_requested.emit()
 
     def selection_state(self) -> UISelectionState:
@@ -840,7 +900,10 @@ class ControlPanel(QWidget):
             show_labels=self.show_labels.isChecked(),
             speed=float(self.speed.value()),
             flow_vector=self.flow_vector(),
+            flow_sigma=float(self.flow_sigma_spin.value()),
+            flow_floor=float(self.flow_floor_spin.value()) / 100.0,
             impact=float(self.flow_impact_spin.value()) / 100.0,
+            inertia=int(self.inertia_spin.value()),
         )
 
 
@@ -1035,8 +1098,8 @@ class RiverCrossingMainWindow(QMainWindow):
         self.single_canvas.set_grid_shape(nx, ny)
         self.compare_view.set_grid_shape(nx, ny)
         self._populate_control_options()
-        flow = self._env_cfg.get("flow", {}).get("vector", [1.0, 0.0])
-        self.control_panel.set_flow_vector(float(flow[0]), float(flow[1]))
+        flow_cfg = self._env_cfg.get("flow", {})
+        self.control_panel.set_flow_from_config(flow_cfg)
         self._render_current_tab()
 
     def _populate_control_options(self) -> None:
@@ -1044,12 +1107,26 @@ class RiverCrossingMainWindow(QMainWindow):
         algorithms = [str(item) for item in self._exp_cfg["algorithms"]]
         seeds = [int(item) for item in self._exp_cfg["seeds"]]
 
+        for combo in (
+            self.control_panel.environment_combo,
+            self.control_panel.algorithm_combo,
+            self.control_panel.seed_combo,
+        ):
+            combo.blockSignals(True)
+
         self.control_panel.environment_combo.clear()
         self.control_panel.environment_combo.addItems(environments)
         self.control_panel.algorithm_combo.clear()
         self.control_panel.algorithm_combo.addItems(algorithms)
         self.control_panel.seed_combo.clear()
         self.control_panel.seed_combo.addItems(parse_seed_options(seeds))
+
+        for combo in (
+            self.control_panel.environment_combo,
+            self.control_panel.algorithm_combo,
+            self.control_panel.seed_combo,
+        ):
+            combo.blockSignals(False)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main Toolbar")
@@ -1252,8 +1329,6 @@ class RiverCrossingMainWindow(QMainWindow):
             self._render_compare_frame()
 
     def _handle_redraw_request(self) -> None:
-        flow = self.control_panel.selection_state().flow_vector
-        self._env_cfg.setdefault("flow", {})["vector"] = [float(flow[0]), float(flow[1])]
         if self._animation_timer.isActive():
             self._restart_animation_timer()
         self._render_current_tab()
@@ -1269,9 +1344,19 @@ class RiverCrossingMainWindow(QMainWindow):
 
     def _current_environment(self) -> RiverEnvironment:
         env_cfg = dict(self._env_cfg)
-        env_cfg["flow"] = dict(env_cfg.get("flow", {}))
-        flow = self.control_panel.selection_state().flow_vector
-        env_cfg["flow"]["vector"] = [float(flow[0]), float(flow[1])]
+        selection = self.control_panel.selection_state()
+        vi, vj = selection.flow_vector
+        # Guard: use the config's own flow type if the selection is not a known type.
+        flow_type = selection.environment if selection.environment in ("gaussian", "constant") \
+            else env_cfg.get("flow", {}).get("type", "constant")
+        flow_cfg: dict = {
+            "type": flow_type,
+            "vector": [vi, vj],
+        }
+        if flow_type == "gaussian":
+            flow_cfg["sigma"] = selection.flow_sigma
+            flow_cfg["floor"] = selection.flow_floor
+        env_cfg["flow"] = flow_cfg
         return RiverEnvironment.from_config(env_cfg)
 
     def _current_cost_function(self, env: RiverEnvironment) -> CostFunction:
@@ -1279,6 +1364,7 @@ class RiverCrossingMainWindow(QMainWindow):
         effective_algo_cfg = dict(self._algo_cfg)
         effective_algo_cfg["common"] = dict(effective_algo_cfg.get("common", {}))
         effective_algo_cfg["common"]["beta"] = float(selection.impact)
+        effective_algo_cfg["common"]["inertia"] = int(selection.inertia)
         return CostFunction.from_config(effective_algo_cfg, env.flow)
 
     def _env_start(self) -> tuple[int, int]:
@@ -1287,25 +1373,26 @@ class RiverCrossingMainWindow(QMainWindow):
     def _env_goal(self) -> tuple[int, int]:
         return (int(self._env_cfg["goal"][0]), int(self._env_cfg["goal"][1]))
 
-    def _env_flow(self) -> tuple[float, float]:
-        flow = self.control_panel.selection_state().flow_vector
-        return (float(flow[0]), float(flow[1]))
+    def _env_flow_fn(self, env: RiverEnvironment) -> Callable[[int, int], tuple[float, float]]:
+        """Return a per-cell flow callable from the current environment's flow field."""
+        flow = env.flow
+        return lambda i, j: flow.at(State(i, j))
 
     def _render_run_frame(self) -> None:
         start = self._env_start()
         goal = self._env_goal()
-        flow = self._env_flow()
         state = self.control_panel.selection_state()
 
         if self._single_run is None:
             env = self._current_environment()
+            flow_fn = self._env_flow_fn(env)
             overlay = build_action_overlay(env, State(start[0], start[1]), best_action=None)
             cost_fn = self._current_cost_function(env)
             self.run_canvas.draw_run(
                 start=start,
                 goal=goal,
                 path=[],
-                flow_vector=flow,
+                flow_fn=flow_fn,
                 show_flow=state.show_flow,
                 show_labels=state.show_labels,
                 title_suffix="ready",
@@ -1315,6 +1402,7 @@ class RiverCrossingMainWindow(QMainWindow):
             return
 
         env = self._current_environment()
+        flow_fn = self._env_flow_fn(env)
         if self._single_run.exploration_snapshots:
             snap_idx = max(0, min(self._single_frame - 1, len(self._single_run.exploration_snapshots) - 1))
             visible_path = self._single_run.exploration_snapshots[snap_idx]
@@ -1339,7 +1427,7 @@ class RiverCrossingMainWindow(QMainWindow):
             start=start,
             goal=goal,
             path=visible_path,
-            flow_vector=flow,
+            flow_fn=flow_fn,
             show_flow=state.show_flow,
             show_labels=state.show_labels,
             title_suffix=f"{self._single_run.title} | {frame_label}",
@@ -1357,17 +1445,17 @@ class RiverCrossingMainWindow(QMainWindow):
     def _render_single_frame(self) -> None:
         start = self._env_start()
         goal = self._env_goal()
-        flow = self._env_flow()
         state = self.control_panel.selection_state()
 
         if self._single_run is None:
             env = self._current_environment()
+            flow_fn = self._env_flow_fn(env)
             overlay = build_action_overlay(env, State(start[0], start[1]), best_action=None)
             self.single_canvas.draw_run(
                 start=start,
                 goal=goal,
                 path=[],
-                flow_vector=flow,
+                flow_fn=flow_fn,
                 show_flow=state.show_flow,
                 show_labels=state.show_labels,
                 title_suffix="ready",
@@ -1383,6 +1471,7 @@ class RiverCrossingMainWindow(QMainWindow):
 
         visible_path = visible_path_for_frame(self._single_run.best_path, self._single_frame)
         env = self._current_environment()
+        flow_fn = self._env_flow_fn(env)
         current_cell = visible_path[-1] if visible_path else start
         best_action = None
         next_action_index = max(0, len(visible_path) - 1)
@@ -1397,7 +1486,7 @@ class RiverCrossingMainWindow(QMainWindow):
             start=start,
             goal=goal,
             path=visible_path,
-            flow_vector=flow,
+            flow_fn=flow_fn,
             show_flow=state.show_flow,
             show_labels=state.show_labels,
             title_suffix=f"{self._single_run.title} | frame={len(visible_path)}/{len(self._single_run.best_path)}",
@@ -1413,7 +1502,6 @@ class RiverCrossingMainWindow(QMainWindow):
     def _render_compare_frame(self) -> None:
         start = self._env_start()
         goal = self._env_goal()
-        flow = self._env_flow()
         state = self.control_panel.selection_state()
 
         if not self._compare_runs:
@@ -1422,10 +1510,12 @@ class RiverCrossingMainWindow(QMainWindow):
             self.metrics_panel.update_neighborhood(None, None, None, None)
             return
 
+        env = self._current_environment()
+        flow_fn = self._env_flow_fn(env)
         self.compare_view.draw_runs(
             start=start,
             goal=goal,
-            flow_vector=flow,
+            flow_fn=flow_fn,
             show_flow=state.show_flow,
             show_labels=state.show_labels,
             frame_index=self._compare_frame,
