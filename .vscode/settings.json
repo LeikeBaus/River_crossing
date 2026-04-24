@@ -11,6 +11,22 @@
         "/^cd /home/nils/Downloads/Programmierung/River_crossing && source \\.venv/bin/activate && python -c \"\nfrom experiments\\.sweep import load_sweep_config, count_sweep_points, sweep_points\n\ncfg = load_sweep_config\\('configs/sweep\\.yaml'\\)\ntotal = count_sweep_points\\(cfg\\)\nprint\\(f'Total sweep points: \\{total\\}'\\)\n\n# Spot-check first and last point\npts = list\\(sweep_points\\(cfg\\)\\)\np0, pN = pts\\[0\\], pts\\[-1\\]\nprint\\(f'First: type=\\{p0\\.flow_type\\} dir=\\{p0\\.flow_dir\\} str=\\{p0\\.flow_strength\\} sigma=\\{p0\\.sigma\\} inertia=\\{p0\\.inertia\\}'\\)\nprint\\(f'Last:  type=\\{pN\\.flow_type\\} dir=\\{pN\\.flow_dir\\} str=\\{pN\\.flow_strength\\} sigma=\\{pN\\.sigma\\} inertia=\\{pN\\.inertia\\}'\\)\nprint\\(\\)\n# verify combos: gaussian: 2 dirs \\* 11 str \\* 10 sigmas \\* 5 inertias = 1100\n# constant:      2 dirs \\* 11 str \\*  1 sigma \\* 5 inertias = 110\n# total = 1210\nprint\\('Expected: 1210  Got:', total, '->',  'OK' if total == 1210 else 'MISMATCH'\\)\n\"\n$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && python -m unittest test_sweep -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && head -5 requirements\\.txt && ls test/__init__\\.py 2>/dev/null \\|\\| echo \"no __init__\\.py\" && cat main\\.py \\| grep -i test 2>/dev/null \\| head -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && python -m unittest discover -s test -p \"test_sweep\\.py\" -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && python -c \"\nfrom experiments\\.sweep import load_sweep_config, count_sweep_points\ncfg = load_sweep_config\\('configs/sweep\\.yaml'\\)\nprint\\('Sweep points:', count_sweep_points\\(cfg\\)\\)\n\" && python -m unittest discover -s test -p \"test_sweep\\.py\" -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

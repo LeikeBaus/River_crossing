@@ -17,7 +17,7 @@ The application supports:
 
 - loading stored experiment results,
 - running a single experiment from the toolbar,
-- running an experiment batch from the toolbar,
+- running an experiment batch from the toolbar (full parameter sweep over all combinations in `configs/sweep.yaml`; cached results are skipped),
 - showing the selected result record from the toolbar,
 - selecting environment, algorithm, and seed,
 - animating trajectories,
@@ -29,6 +29,7 @@ The application supports:
 - interactively changing the flow strength via slider,
 - interactively changing Gaussian flow profile parameters (sigma and floor) when the Gaussian environment type is selected,
 - interactively changing heading memory depth via the inertia spinbox (0–5),
+- interactively changing the Q-learning episode count via the QL episodes combo (200 / 500 / 1500),
 - interactively changing flow impact in percent,
 - inspecting a Local 3x3 neighborhood with action costs.
 
@@ -49,6 +50,7 @@ The application supports:
 - Seed selector
 - Animation speed control
 - Inertia spinbox (0–5)
+- QL episodes combo (200 / 500 / 1500)
 - Flow direction radio buttons (↓ Top → Bottom / ↑ Bottom → Top)
 - Flow strength slider
 - Flow sigma spinbox (visible for Gaussian environment only)
@@ -72,6 +74,7 @@ The flow section contains:
 - a QDoubleSpinBox for Gaussian sigma (width of the fast-lane profile in columns), visible only when the environment type is "gaussian".
 - a QDoubleSpinBox for Gaussian floor (minimum flow fraction at the shores), visible only when the environment type is "gaussian".
 - an impact spinbox displayed as 0% to 100%, mapped internally to the float parameter β.
+- a QL episodes QComboBox with options 200, 500, and 1500, controlling the number of training episodes used by Q-learning during single or batch runs.
 
 ### 4.4 Center Tabs
 The center panel contains three tabs:
@@ -143,4 +146,5 @@ The current UI artifact is considered achieved when:
 7. the Run tab shows action coloring,
 8. the Local 3x3 panel reflects local action costs,
 9. the inertia spinbox updates the heading-memory depth used by all compatible algorithms,
-10. Gaussian profile controls (sigma, floor) appear only when the Gaussian environment type is selected.
+10. Gaussian profile controls (sigma, floor) appear only when the Gaussian environment type is selected,
+11. the QL episodes combo sets the Q-learning training depth and is included in the experiment ID and sweep.

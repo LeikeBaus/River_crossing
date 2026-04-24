@@ -50,6 +50,7 @@ class SweepPoint:
     beta: float
     inertia: int
     turn_penalty: float
+    ql_episodes: int
     grid_nx: int
     grid_ny: int
     seeds: list[int]
@@ -66,6 +67,9 @@ class SweepPoint:
         effective["common"]["beta"] = self.beta
         effective["common"]["inertia"] = self.inertia
         effective["common"]["turn_penalty"] = self.turn_penalty
+        # Propagate ql_episodes into the q_learning section
+        effective["q_learning"] = dict(effective.get("q_learning", {}))
+        effective["q_learning"]["episodes"] = self.ql_episodes
         return effective
 
 
@@ -103,6 +107,7 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
     alpha: float = float(sweep_cfg.get("alpha", 1.0))
     beta: float = float(sweep_cfg.get("beta", 1.0))
     inertias: list[int] = [int(v) for v in sweep_cfg.get("inertias", [0])]
+    ql_episodes_list: list[int] = [int(v) for v in sweep_cfg.get("ql_episodes", [1200])]
     turn_penalty: float = float(sweep_cfg.get("turn_penalty", 1.0))
     grid_nx: int = int(sweep_cfg.get("grid_nx", 40))
     grid_ny: int = int(sweep_cfg.get("grid_ny", 20))
@@ -124,21 +129,49 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
                         flow_cfg_g["sigma"] = sigma
                         flow_cfg_g["floor"] = floor
                         for inertia in inertias:
+                            for ql_ep in ql_episodes_list:
+                                yield SweepPoint(
+                                    flow_type=ft,
+                                    flow_dir=fd,
+                                    flow_strength=strength,
+                                    sigma=sigma,
+                                    floor=floor,
+                                    alpha=alpha,
+                                    beta=beta,
+                                    inertia=inertia,
+                                    turn_penalty=turn_penalty,
+                                    ql_episodes=ql_ep,
+                                    grid_nx=grid_nx,
+                                    grid_ny=grid_ny,
+                                    seeds=seeds,
+                                    algorithms=algorithms,
+                                    flow_cfg=dict(flow_cfg_g),
+                                    algo_cfg_common={
+                                        "alpha": alpha,
+                                        "beta": beta,
+                                        "inertia": inertia,
+                                        "turn_penalty": turn_penalty,
+                                    },
+                                )
+                else:
+                    for inertia in inertias:
+                        for ql_ep in ql_episodes_list:
                             yield SweepPoint(
                                 flow_type=ft,
                                 flow_dir=fd,
                                 flow_strength=strength,
-                                sigma=sigma,
+                                sigma=5.0,
                                 floor=floor,
                                 alpha=alpha,
                                 beta=beta,
                                 inertia=inertia,
                                 turn_penalty=turn_penalty,
+                                ql_episodes=ql_ep,
                                 grid_nx=grid_nx,
                                 grid_ny=grid_ny,
                                 seeds=seeds,
                                 algorithms=algorithms,
-                                flow_cfg=dict(flow_cfg_g),
+                                flow_cfg=dict(flow_cfg),
                                 algo_cfg_common={
                                     "alpha": alpha,
                                     "beta": beta,
@@ -146,30 +179,6 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
                                     "turn_penalty": turn_penalty,
                                 },
                             )
-                else:
-                    for inertia in inertias:
-                        yield SweepPoint(
-                            flow_type=ft,
-                            flow_dir=fd,
-                            flow_strength=strength,
-                            sigma=5.0,
-                            floor=floor,
-                            alpha=alpha,
-                            beta=beta,
-                            inertia=inertia,
-                            turn_penalty=turn_penalty,
-                            grid_nx=grid_nx,
-                            grid_ny=grid_ny,
-                            seeds=seeds,
-                            algorithms=algorithms,
-                            flow_cfg=dict(flow_cfg),
-                            algo_cfg_common={
-                                "alpha": alpha,
-                                "beta": beta,
-                                "inertia": inertia,
-                                "turn_penalty": turn_penalty,
-                            },
-                        )
 
 
 def count_sweep_points(sweep_cfg: dict[str, Any]) -> int:
@@ -234,6 +243,7 @@ def run_sweep(
             seeds=point.seeds,
             grid_nx=point.grid_nx,
             grid_ny=point.grid_ny,
+            ql_episodes=point.ql_episodes,
         )
         raw_path, ev_path = results_paths(exp_id, analysis_dir)
 
@@ -257,6 +267,7 @@ def run_sweep(
                 flow_config_override=dict(point.flow_cfg),
                 impact_override=point.beta,
                 inertia_override=point.inertia,
+                rl_episodes=point.ql_episodes,
             )
             evaluate_results(result_records, output_path=ev_path)
             records = [r.to_dict() for r in result_records]

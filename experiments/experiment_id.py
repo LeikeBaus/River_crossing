@@ -4,7 +4,7 @@ Encoding scheme
 ---------------
 Format (tokens joined by ``-``):
 
-    [{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}]-S{seeds}
+    [{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}][-e{N}]-S{seeds}
 
 Token legend
 ~~~~~~~~~~~~
@@ -21,6 +21,8 @@ b{NN}       : beta  × 10; **omitted when beta  == 1.0**
 i{N}        : inertia (always included)
 t{NN}       : turn_penalty × 10; **omitted when turn_penalty == 1.0**
 g{NX}x{NY} : grid dimensions; **omitted when nx=40, ny=20**
+e{N}        : Q-learning episodes (e.g. e200, e500, e1500);
+              **omitted when ql_episodes == 1200** (the config default)
 S{seeds}    : seed encoding:
                   contiguous  → {first}k{last}  e.g. S1k5
                   single      → {seed}           e.g. S3
@@ -56,6 +58,7 @@ def build_experiment_id(
     algorithm: str | None = None,
     grid_nx: int = _DEFAULT_NX,
     grid_ny: int = _DEFAULT_NY,
+    ql_episodes: int = 1200,
 ) -> str:
     """Return a compact, filesystem-safe experiment identifier string.
 
@@ -71,6 +74,9 @@ def build_experiment_id(
         Algorithm name for a single-algorithm run.  Pass ``None`` for batch runs.
     grid_nx, grid_ny:
         Grid dimensions.  Omitted from the ID when equal to the defaults (40 × 20).
+    ql_episodes:
+        Number of Q-learning training episodes.  Omitted from the ID when equal
+        to 1200 (the ``algorithm.yaml`` default).
     """
     parts: list[str] = []
 
@@ -128,7 +134,9 @@ def build_experiment_id(
     # ── Grid (omit when default) ──────────────────────────────────────────────
     if grid_nx != _DEFAULT_NX or grid_ny != _DEFAULT_NY:
         parts.append(f"g{grid_nx}x{grid_ny}")
-
+    # ── Q-learning episodes (omit when default 1200) ───────────────────────────
+    if int(ql_episodes) != 1200:
+        parts.append(f"e{int(ql_episodes)}")
     # ── Seeds ─────────────────────────────────────────────────────────────────
     seeds_sorted = sorted(set(int(s) for s in seeds))
     if not seeds_sorted:

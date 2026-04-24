@@ -66,6 +66,7 @@ class UISelectionState:
     flow_floor: float = 0.1
     impact: float = 0.0
     inertia: int = 2
+    ql_episodes: int = 500
 
 
 @dataclass(frozen=True)
@@ -309,6 +310,7 @@ class SimulationWorker(QObject):
                     algo_cfg=effective_algo,
                     seeds=seeds,
                     algorithm=self.selection.algorithm,
+                    ql_episodes=self.selection.ql_episodes,
                 )
                 raw_path, ev_path = results_paths(exp_id, self.analysis_dir)
 
@@ -339,6 +341,7 @@ class SimulationWorker(QObject):
                         flow_config_override=flow_cfg,
                         impact_override=self.selection.impact,
                         inertia_override=self.selection.inertia,
+                        rl_episodes=self.selection.ql_episodes,
                     )
                     runs.append(record.to_dict())
                     self.progress.emit(int(15 + 85 * (idx + 1) / len(seeds)))
@@ -799,6 +802,14 @@ class ControlPanel(QWidget):
             "0 = no turn penalty, 1 = only last step, 5 = last 5 steps (more arc-like paths)."
         )
 
+        self.ql_episodes_combo = QComboBox()
+        self.ql_episodes_combo.addItems(["200", "500", "1500"])
+        self.ql_episodes_combo.setCurrentText("500")
+        self.ql_episodes_combo.setToolTip(
+            "Number of Q-learning training episodes.\n"
+            "Only affects the Q-learning algorithm."
+        )
+
         # Flow direction: top→bottom (vj<0) or bottom→top (vj>0)
         self.flow_dir_down = QRadioButton("↓  Top → Bottom")
         self.flow_dir_up = QRadioButton("↑  Bottom → Top")
@@ -863,6 +874,7 @@ class ControlPanel(QWidget):
         self.show_labels.stateChanged.connect(lambda _: self.redraw_requested.emit())
         self.speed.valueChanged.connect(lambda _: self.redraw_requested.emit())
         self.inertia_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
+        self.ql_episodes_combo.currentIndexChanged.connect(lambda _: self.redraw_requested.emit())
 
         self.flow_dir_down.toggled.connect(lambda _: self.redraw_requested.emit())
         self.flow_dir_up.toggled.connect(lambda _: self.redraw_requested.emit())
@@ -881,6 +893,7 @@ class ControlPanel(QWidget):
         form.addRow("Seed", self.seed_combo)
         form.addRow("Animation speed", self.speed)
         form.addRow("Inertia", self.inertia_spin)
+        form.addRow("QL episodes", self.ql_episodes_combo)
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Flow direction"))
@@ -978,6 +991,7 @@ class ControlPanel(QWidget):
             flow_floor=float(self.flow_floor_spin.value()) / 100.0,
             impact=float(self.flow_impact_spin.value()) / 100.0,
             inertia=int(self.inertia_spin.value()),
+            ql_episodes=int(self.ql_episodes_combo.currentText()),
         )
 
 

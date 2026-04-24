@@ -3,7 +3,7 @@
 # Fixed values are single-element lists (or bare scalars for clarity).
 # The Cartesian product of all lists forms the full set of experiment points.
 
-seeds: [1, 2, 3, 4, 5]
+seeds: [1]
 
 # Algorithm selection — all available algorithms
 algorithms:
@@ -25,11 +25,11 @@ flow_directions:
   - down
 
 # Flow strength (vector magnitude).  Range 0.0 – 1.0 in steps of 0.1.
-flow_strengths: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+flow_strengths: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 # Gaussian sigma values (grid cells).  Only used when flow_type == "gaussian".
 # Range 1.0 – 10.0 in steps of 1.0.
-sigmas: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+sigmas: [2.0, 4.0, 6.0, 8.0, 10.0]
 
 # Gaussian floor fraction — fixed at 10 %
 floor: 0.10
@@ -40,6 +40,9 @@ beta: 1.0
 
 # Inertia values (heading-history depth)
 inertias: [0, 1, 2, 3, 4]
+
+# Q-learning episodes — three options
+ql_episodes: [200, 500, 1500]
 
 # Turn penalty — fixed
 turn_penalty: 1.0

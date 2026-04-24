@@ -324,8 +324,7 @@ Zusätzlich umfasst die UI:
 - einen Slider für die Strömungsstärke,
 - Gauß-Profilregler (Sigma, Floor) bei Auswahl des Gauß'schen Strömungstyps,
 - eine zusätzliche **Impact**-Steuerung in Prozent, die intern auf den Gewichtungsparameter β der Kostenfunktion abgebildet wird,
-- ein **Inertia**-Spinbox (0–5) zur Steuerung des Heading-Speichers,
-- ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
+- ein **Inertia**-Spinbox (0–5) zur Steuerung des Heading-Speichers,- ein **QL episodes**-Auswahlmenü (200 / 500 / 1500) zur Festlegung der Trainingstiefe des Q-Learning,- ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
 
 Im Run-Tab werden Entscheidungsoptionen farblich hervorgehoben:
 - rot = ungültige Aktion,
@@ -406,3 +405,18 @@ python -c "from experiments.evaluator import evaluate_results; evaluate_results(
 ```bash
 python -c "from experiments.runner import run_all_experiments; run_all_experiments(config_dir='configs', output_path='analysis/raw_results_fast.json', rl_episodes=50)"
 ```
+
+### 10.4 Run Full Parameter Sweep via UI
+Use the **Run Experiment Batch** toolbar action. The sweep iterates all combinations defined in `configs/sweep.yaml` (currently 3 630 points: flow types × directions × strengths × sigma × floor × alpha × beta × inertia × QL episodes × seeds). Results are cached: points whose output files already exist in `analysis/` are skipped.
+
+### 10.5 Count Sweep Points
+```bash
+python -c "from experiments.sweep import load_sweep_config, count_sweep_points; print(count_sweep_points(load_sweep_config('configs/sweep.yaml')))"
+```
+
+### 10.6 Experiment ID Scheme
+Every result file is named with a structured ID:
+```
+[{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}][-e{N}]-S{seeds}
+```
+The `e{N}` token encodes the Q-learning episode count (e.g. `e200`, `e500`, `e1500`); it is omitted when the default value of 1200 is used. Raw results use the prefix `R-`, evaluations use `EV-`.
