@@ -3,6 +3,7 @@ common:
   beta: 1.0 # weight for energy cost
   inertia: 2 # heading-history depth (0 = disabled, ≤5 recommended)
   turn_penalty: 1.0 # multiplier for the turn cost term
+  version: 0.100 # version number for experiment tracking and reproducibility
 
 dijkstra: {}
 
@@ -36,4 +37,4 @@ q_learning:
   max_steps_per_episode: 6400 # max steps per episode (default: 4 * nx * ny = 3200)
   min_success_rate_for_decay: 0.05 # hold epsilon until 5 % of recent episodes succeed
   success_window: 100 # number of recent episodes used to compute success rate
-  max_snapshots: 200 # max exploration snapshots stored for UI animation
+  max_snapshots: 400 # max exploration snapshots stored for UI animation

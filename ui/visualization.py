@@ -50,6 +50,7 @@ from experiments.runner import (
     run_single_experiment,
     save_experiment_results,
 )
+from experiments.sweep import count_sweep_points, load_sweep_config, run_sweep
 
 
 @dataclass(frozen=True)
@@ -356,49 +357,51 @@ class SimulationWorker(QObject):
 
             if self.mode == "run_batch_experiment":
                 algo_cfg = load_algorithm_config(self.config_dir / "algorithm.yaml")
-                exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
-                seeds = [int(s) for s in exp_cfg.get("seeds", [])]
-                flow_cfg = self._build_flow_config_override(self.selection)
-                effective_algo = self._effective_algo_cfg(algo_cfg)
-                exp_id = build_experiment_id(
-                    flow_cfg=flow_cfg,
-                    algo_cfg=effective_algo,
-                    seeds=seeds,
+                sweep_cfg_path = self.config_dir / "sweep.yaml"
+                sweep_cfg = load_sweep_config(sweep_cfg_path)
+                total = count_sweep_points(sweep_cfg)
+                self.message.emit(
+                    f"Sweep: {total} experiment point(s). Skipping already-cached results."
                 )
-                raw_path, ev_path = results_paths(exp_id, self.analysis_dir)
+                self.analysis_dir.mkdir(parents=True, exist_ok=True)
 
-                if raw_path.exists():
-                    self.message.emit(f"Cache hit \u2014 loading {raw_path.name}")
-                    records_dicts: list[dict] = load_experiment_results(raw_path)
-                    if not ev_path.exists():
-                        evaluate_results(records_dicts, output_path=ev_path)
-                    self.progress.emit(100)
+                last_result = None
+                gen = run_sweep(
+                    sweep_cfg=sweep_cfg,
+                    base_algo_cfg=algo_cfg,
+                    config_dir=self.config_dir,
+                    analysis_dir=self.analysis_dir,
+                )
+                try:
+                    while True:
+                        progress_info = next(gen)
+                        done = progress_info["done"]
+                        status = "cached" if progress_info["cached"] else "ran"
+                        self.message.emit(
+                            f"  [{done}/{total}] {status}: {progress_info['exp_id']}"
+                        )
+                        pct = int(15 + 85 * done / total)
+                        self.progress.emit(pct)
+                        last_result = progress_info
+                except StopIteration as exc:
+                    last_result_obj = exc.value  # SweepResult | None
+
+                if last_result_obj is not None:
+                    last_records = last_result_obj.records
+                    self.message.emit(
+                        f"Sweep complete. Last experiment: {last_result_obj.exp_id}"
+                    )
                     self.result.emit({
                         "mode": "run_batch_experiment",
-                        "records": records_dicts,
-                        "results_path": str(raw_path),
-                        "summary_path": str(ev_path),
-                        "cached": True,
+                        "records": last_records,
+                        "results_path": str(last_result_obj.raw_path),
+                        "summary_path": str(last_result_obj.ev_path),
+                        "cached": last_result_obj.cached,
+                        "last_point": last_result_obj.point,
                     })
-                    return
-
-                self.message.emit("Running experiment batch and evaluation...")
-                records = run_all_experiments(
-                    config_dir=self.config_dir,
-                    output_path=raw_path,
-                    flow_config_override=flow_cfg,
-                    impact_override=self.selection.impact,
-                    inertia_override=self.selection.inertia,
-                )
-                evaluate_results(records, output_path=ev_path)
-                self.progress.emit(100)
-                self.result.emit({
-                    "mode": "run_batch_experiment",
-                    "records": [r.to_dict() for r in records],
-                    "results_path": str(raw_path),
-                    "summary_path": str(ev_path),
-                    "cached": False,
-                })
+                else:
+                    self.message.emit("Sweep produced no results.")
+                    self.result.emit({"mode": "run_batch_experiment", "records": []})
                 return
 
             if self.mode == "show_results":
@@ -1352,11 +1355,26 @@ class RiverCrossingMainWindow(QMainWindow):
             return
 
         if mode == "run_batch_experiment":
-            self._records = [dict(item) for item in payload.get("records", [])]
+            last_records = [dict(item) for item in payload.get("records", [])]
+            for run in last_records:
+                self._upsert_record(run)
             source = "loaded from cache" if payload.get("cached") else "saved"
-            self._append_log(f"Batch results {source}: {len(self._records)} runs → {payload.get('results_path')}")
+            self._append_log(
+                f"Sweep complete — last experiment {source}: "
+                f"{len(last_records)} run(s) → {payload.get('results_path')}"
+            )
             self._append_log(f"Evaluation summary: {payload.get('summary_path')}")
-            self.metrics_panel.update_metrics({})
+
+            # Select the last experiment in the UI (first seed of the last point)
+            if last_records:
+                last_run = last_records[0]
+                env_name = str(last_run.get("environment_name", ""))
+                algo_name = str(last_run.get("algorithm", ""))
+                seed_val = int(last_run.get("seed", 1))
+                self._select_run_in_controls(env_name, algo_name, seed_val)
+                self._set_single_run(last_run)
+            else:
+                self.metrics_panel.update_metrics({})
             return
 
         if mode == "show_results":
@@ -1368,6 +1386,34 @@ class RiverCrossingMainWindow(QMainWindow):
 
         self._append_log(f"Unhandled worker mode: {mode}")
         self.metrics_panel.update_metrics({})
+
+    def _select_run_in_controls(self, env_name: str, algorithm: str, seed: int) -> None:
+        """Silently update the three combo-boxes to the given env/algo/seed."""
+        for combo in (
+            self.control_panel.environment_combo,
+            self.control_panel.algorithm_combo,
+            self.control_panel.seed_combo,
+        ):
+            combo.blockSignals(True)
+
+        env_idx = self.control_panel.environment_combo.findText(env_name)
+        if env_idx >= 0:
+            self.control_panel.environment_combo.setCurrentIndex(env_idx)
+
+        algo_idx = self.control_panel.algorithm_combo.findText(algorithm)
+        if algo_idx >= 0:
+            self.control_panel.algorithm_combo.setCurrentIndex(algo_idx)
+
+        seed_idx = self.control_panel.seed_combo.findText(str(seed))
+        if seed_idx >= 0:
+            self.control_panel.seed_combo.setCurrentIndex(seed_idx)
+
+        for combo in (
+            self.control_panel.environment_combo,
+            self.control_panel.algorithm_combo,
+            self.control_panel.seed_combo,
+        ):
+            combo.blockSignals(False)
 
     def _upsert_record(self, run: dict[str, Any]) -> None:
         key = (

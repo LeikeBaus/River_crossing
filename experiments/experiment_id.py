@@ -4,11 +4,13 @@ Encoding scheme
 ---------------
 Format (tokens joined by ``-``):
 
-    [{algo}-]{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}]-S{seeds}
+    [{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}]-S{seeds}
 
 Token legend
 ~~~~~~~~~~~~
 algo        : dijk | astar | wastar | dp | apf | ql  (omitted for batch runs)
+V{NNNN}     : version from common.version × 1000, zero-padded to 4 digits
+              e.g. version 0.100 (stored as float 0.1 by YAML) → V0100; always present
 flow_type   : G = gaussian, C = constant
 dir         : u = bottom→top (vj ≥ 0), d = top→bottom (vj < 0)
 v{NN}       : flow strength × 10, zero-padded to 2 digits; **omitted when strength == 1.0**
@@ -76,6 +78,12 @@ def build_experiment_id(
     if algorithm is not None:
         parts.append(_ALGO_ABBREV.get(algorithm, algorithm[:6]))
 
+    # ── Version ───────────────────────────────────────────────────────────────
+    common = algo_cfg.get("common", {})
+    version_raw = float(common.get("version", 0.0))
+    version_int = int(round(version_raw * 1000))
+    parts.append(f"V{version_int:04d}")
+
     # ── Flow ─────────────────────────────────────────────────────────────────
     flow_type = str(flow_cfg.get("type", "constant"))
     vec = flow_cfg.get("vector", [0.0, 1.0])
@@ -99,7 +107,7 @@ def build_experiment_id(
         parts.append(f"f{int(round(floor_frac * 100)):02d}")
 
     # ── Cost-function parameters ─────────────────────────────────────────────
-    common = algo_cfg.get("common", {})
+    # (common already read above for version)
     alpha = float(common.get("alpha", 1.0))
     beta = float(common.get("beta", 1.0))
     inertia = int(common.get("inertia", 0))
