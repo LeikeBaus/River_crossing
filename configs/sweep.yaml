@@ -25,11 +25,11 @@ flow_directions:
   - down
 
 # Flow strength (vector magnitude).  Range 0.0 – 1.0 in steps of 0.1.
-flow_strengths: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+flow_strengths: [0.0, 0.5, 1.0]
 
 # Gaussian sigma values (grid cells).  Only used when flow_type == "gaussian".
 # Range 1.0 – 10.0 in steps of 1.0.
-sigmas: [2.0, 4.0, 6.0, 8.0, 10.0]
+sigmas: [5.0]
 
 # Gaussian floor fraction — fixed at 10 %
 floor: 0.10

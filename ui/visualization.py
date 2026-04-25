@@ -817,7 +817,7 @@ class ControlPanel(QWidget):
 
         self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
         self.flow_strength_slider.setRange(0, 10)
-        self.flow_strength_slider.setSingleStep(1)
+        self.flow_strength_slider.setSingleStep(5)
         self.flow_strength_slider.setValue(10)
 
         self.flow_strength_edit = QLineEdit("1.0")
@@ -825,8 +825,8 @@ class ControlPanel(QWidget):
 
         # Gaussian-only parameters
         self.flow_sigma_spin = QDoubleSpinBox()
-        self.flow_sigma_spin.setRange(0.5, 20.0)
-        self.flow_sigma_spin.setSingleStep(0.5)
+        self.flow_sigma_spin.setRange(5.0, 10.0)
+        self.flow_sigma_spin.setSingleStep(5.0)
         self.flow_sigma_spin.setValue(5.0)
         self.flow_sigma_spin.setToolTip(
             "Gaussian width σ in grid cells.\n"
