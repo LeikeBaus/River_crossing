@@ -106,14 +106,18 @@ _FAKE_RECORD = [
 ]
 
 
-def _exp_id_for_point(point: SweepPoint) -> str:
+def _exp_id_for_point(point: SweepPoint, algorithm: str | None = None) -> str:
+    """Return the per-algorithm exp_id used by run_sweep for cache look-up."""
     effective_algo = point.build_algo_override(_MINIMAL_ALGO_CFG)
+    algo = algorithm if algorithm is not None else point.algorithms[0]
     return build_experiment_id(
         flow_cfg=point.flow_cfg,
         algo_cfg=effective_algo,
         seeds=point.seeds,
+        algorithm=algo,
         grid_nx=point.grid_nx,
         grid_ny=point.grid_ny,
+        ql_episodes=point.ql_episodes,
     )
 
 
@@ -176,10 +180,11 @@ class SweepCacheTests(unittest.TestCase):
             config_dir.mkdir(parents=True)
             _write_minimal_env_config(config_dir)
 
-            # Pre-write a results file for every sweep point
+            # Pre-write a per-algorithm results file for every sweep point
             for point in sweep_points(_MINIMAL_SWEEP_CFG):
-                raw_path, _ = results_paths(_exp_id_for_point(point), analysis_dir)
-                raw_path.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
+                for algorithm in point.algorithms:
+                    raw_path, _ = results_paths(_exp_id_for_point(point, algorithm), analysis_dir)
+                    raw_path.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
 
             # Patch run_all_experiments so we can detect if it is called
             with patch(
@@ -232,9 +237,10 @@ class SweepCacheTests(unittest.TestCase):
             pts = list(sweep_points(_MINIMAL_SWEEP_CFG))
             self.assertEqual(len(pts), 2)
 
-            # Cache only the first point
-            first_raw, _ = results_paths(_exp_id_for_point(pts[0]), analysis_dir)
-            first_raw.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
+            # Cache only the first point (all its algorithms)
+            for algorithm in pts[0].algorithms:
+                first_raw, _ = results_paths(_exp_id_for_point(pts[0], algorithm), analysis_dir)
+                first_raw.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
 
             fake_record_obj = MagicMock()
             fake_record_obj.to_dict.return_value = _FAKE_RECORD[0]
@@ -287,11 +293,12 @@ class SweepCacheTests(unittest.TestCase):
 
             pts = list(sweep_points(_MINIMAL_SWEEP_CFG))
             for point in pts:
-                raw_path, _ = results_paths(_exp_id_for_point(point), analysis_dir)
-                self.assertTrue(
-                    raw_path.exists(),
-                    f"Expected results file not found: {raw_path.name}",
-                )
+                for algorithm in point.algorithms:
+                    raw_path, _ = results_paths(_exp_id_for_point(point, algorithm), analysis_dir)
+                    self.assertTrue(
+                        raw_path.exists(),
+                        f"Expected results file not found: {raw_path.name}",
+                    )
 
     def test_done_counter_increments_correctly(self) -> None:
         """The 'done' field must run 1 … total in order."""
@@ -304,8 +311,9 @@ class SweepCacheTests(unittest.TestCase):
 
             # Pre-cache all so no real work is done
             for point in sweep_points(_MINIMAL_SWEEP_CFG):
-                raw_path, _ = results_paths(_exp_id_for_point(point), analysis_dir)
-                raw_path.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
+                for algorithm in point.algorithms:
+                    raw_path, _ = results_paths(_exp_id_for_point(point, algorithm), analysis_dir)
+                    raw_path.write_text(json.dumps(_FAKE_RECORD), encoding="utf-8")
 
             with patch("experiments.sweep.run_all_experiments"):
                 progress_list = self._collect_sweep(

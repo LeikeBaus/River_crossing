@@ -117,8 +117,8 @@ class TestAPFPlanner(unittest.TestCase):
         env = _make_env(
             nx=40,
             ny=20,
-            start=State(2, 10),
-            goal=State(37, 10),
+            start=State(2, 5),
+            goal=State(37, 15),
             angle_min=30.0,
             angle_max=60.0,
             flow_vi=1.0,

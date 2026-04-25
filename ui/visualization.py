@@ -364,7 +364,7 @@ class SimulationWorker(QObject):
                 sweep_cfg = load_sweep_config(sweep_cfg_path)
                 total = count_sweep_points(sweep_cfg)
                 self.message.emit(
-                    f"Sweep: {total} experiment point(s). Skipping already-cached results."
+                    f"Sweep: {total} algorithm run(s) total. Skipping already-cached results."
                 )
                 self.analysis_dir.mkdir(parents=True, exist_ok=True)
 
@@ -380,8 +380,9 @@ class SimulationWorker(QObject):
                         progress_info = next(gen)
                         done = progress_info["done"]
                         status = "cached" if progress_info["cached"] else "ran"
+                        algo_label = progress_info.get("algorithm", "")
                         self.message.emit(
-                            f"  [{done}/{total}] {status}: {progress_info['exp_id']}"
+                            f"  [{done}/{total}] {status} ({algo_label}): {progress_info['exp_id']}"
                         )
                         pct = int(15 + 85 * done / total)
                         self.progress.emit(pct)
@@ -410,11 +411,34 @@ class SimulationWorker(QObject):
             if self.mode == "show_results":
                 run = find_single_run(self.records, self.selection)
                 if run is None:
+                    # Check if a specific results file exists for this selection
+                    algo_cfg = load_algorithm_config(self.config_dir / "algorithm.yaml")
+                    exp_cfg = load_experiment_config(self.config_dir / "experiment.yaml")
+                    seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
+                    flow_cfg = self._build_flow_config_override(self.selection)
+                    effective_algo = self._effective_algo_cfg(algo_cfg)
+                    exp_id = build_experiment_id(
+                        flow_cfg=flow_cfg,
+                        algo_cfg=effective_algo,
+                        seeds=seeds,
+                        algorithm=self.selection.algorithm,
+                        ql_episodes=self.selection.ql_episodes,
+                    )
+                    raw_path, _ = results_paths(exp_id, self.analysis_dir)
+                    if raw_path.exists():
+                        self.message.emit(f"Auto-loading {raw_path.name} for current selection.")
+                        self.records = load_experiment_results(raw_path)
+                        run = find_single_run(self.records, self.selection)
+                if run is None:
                     raise ValueError(
                         "No run found for current selection. Load or generate matching results first."
                     )
                 self.progress.emit(100)
-                self.result.emit({"mode": "show_results", "run": run})
+                self.result.emit({
+                    "mode": "show_results",
+                    "run": run,
+                    "records": list(self.records),
+                })
                 return
 
             if self.mode == "compare":
@@ -1180,6 +1204,16 @@ class RiverCrossingMainWindow(QMainWindow):
         self._apply_env_to_views()
         self._try_autoload_latest_results()
 
+        # Connect controls that affect the experiment ID to the auto-load check.
+        # These are added AFTER apply/autoload to avoid spurious checks during init.
+        self.control_panel.inertia_spin.valueChanged.connect(self._on_selection_changed)
+        self.control_panel.ql_episodes_combo.currentIndexChanged.connect(self._on_selection_changed)
+        self.control_panel.flow_dir_down.toggled.connect(self._on_selection_changed)
+        self.control_panel.flow_strength_slider.valueChanged.connect(self._on_selection_changed)
+        self.control_panel.flow_sigma_spin.valueChanged.connect(self._on_selection_changed)
+        self.control_panel.flow_floor_spin.valueChanged.connect(self._on_selection_changed)
+        self.control_panel.flow_impact_spin.valueChanged.connect(self._on_selection_changed)
+
     def _apply_env_to_views(self) -> None:
         nx = int(self._env_cfg["grid"]["nx"])
         ny = int(self._env_cfg["grid"]["ny"])
@@ -1392,6 +1426,8 @@ class RiverCrossingMainWindow(QMainWindow):
             return
 
         if mode == "show_results":
+            for record in payload.get("records", []):
+                self._upsert_record(record)
             self._set_single_run(payload["run"], switch_to_run_tab=False)
             return
         if mode == "compare":
@@ -1454,10 +1490,49 @@ class RiverCrossingMainWindow(QMainWindow):
             self.tabs.setCurrentIndex(0)
         self._render_current_tab()
 
-    def _on_selection_changed(self, _: int) -> None:
-        if not self._records or self._worker_thread is not None:
+    def _on_selection_changed(self, _: Any = None) -> None:
+        if self._worker_thread is not None:
             return
-        self._run_worker("show_results")
+        if self.control_panel._updating_flow_controls:
+            return
+
+        selection = self.control_panel.selection_state()
+        seeds = [int(s) for s in self._exp_cfg.get("seeds", [selection.seed])]
+        effective_algo_cfg = dict(self._algo_cfg)
+        effective_algo_cfg["common"] = dict(effective_algo_cfg.get("common", {}))
+        effective_algo_cfg["common"]["beta"] = selection.impact
+        effective_algo_cfg["common"]["inertia"] = selection.inertia
+        flow_cfg = SimulationWorker._build_flow_config_override(selection)
+        exp_id = build_experiment_id(
+            flow_cfg=flow_cfg,
+            algo_cfg=effective_algo_cfg,
+            seeds=seeds,
+            algorithm=selection.algorithm,
+            ql_episodes=selection.ql_episodes,
+        )
+        raw_path, _ = results_paths(exp_id, self._analysis_dir)
+
+        if raw_path.exists():
+            if str(raw_path) != str(self._results_path):
+                self._load_records_if_available(raw_path)
+            run = find_single_run(self._records, selection)
+            if run is not None:
+                self._set_single_run(run, switch_to_run_tab=False)
+            else:
+                self._append_log(
+                    f"File {raw_path.name} loaded but no run matched seed={selection.seed}."
+                )
+            return
+
+        # No specific file — fall back to in-memory records (e.g. from a batch load)
+        run = find_single_run(self._records, selection)
+        if run is not None:
+            self._set_single_run(run, switch_to_run_tab=False)
+        else:
+            self._append_log(
+                "No run found for current selection. "
+                "Use 'Run Single Experiment' to generate results."
+            )
 
     def _set_compare_runs(self, runs: list[dict[str, Any]]) -> None:
         self._pause_animation(log_message=False)

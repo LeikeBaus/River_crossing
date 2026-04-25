@@ -118,10 +118,7 @@ class RiverEnvironment:
     def valid_actions(self, state: State) -> tuple[Action, ...]:
         """Return valid actions that stay in-bounds and in the water corridor."""
         actions = tuple(a for a in self.actions if is_action_valid(state, a, self.grid))
-        actions = tuple(a for a in actions if not self.is_land(apply_action(state, a, self.grid)))
-        if state == self.start:
-            return tuple(a for a in actions if self._approach_angle_valid(a))
-        return actions
+        return tuple(a for a in actions if not self.is_land(apply_action(state, a, self.grid)))
 
     def transition(self, state: State, action: Action) -> State:
         """Apply *action* to *state* and return the next state.
@@ -133,8 +130,6 @@ class RiverEnvironment:
         ValueError
             If the action would leave the grid.
         """
-        if state == self.start and not self._approach_angle_valid(action):
-            raise ValueError(f"Action {action} from {state} is not a valid diagonal start departure.")
         next_state = apply_action(state, action, self.grid)
         if self.is_land(next_state):
             raise ValueError(f"Action {action} from {state} enters land at {next_state}.")
@@ -186,7 +181,10 @@ class RiverEnvironment:
     # ------------------------------------------------------------------
 
     def _approach_angle_valid(self, action: Action) -> bool:
-        return abs(int(action[0])) == 1 and abs(int(action[1])) == 1
+        theta = self.approach_angle_deg(action)
+        if theta is None:
+            return False
+        return self.docking.angle_min_deg <= theta <= self.docking.angle_max_deg
 
     def __repr__(self) -> str:
         return (

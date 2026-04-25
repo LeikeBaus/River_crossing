@@ -27,6 +27,10 @@
         "/^cd /home/nils/Downloads/Programmierung/River_crossing && python -c \"\nfrom experiments\\.sweep import load_sweep_config, count_sweep_points\ncfg = load_sweep_config\\('configs/sweep\\.yaml'\\)\nprint\\('Sweep points:', count_sweep_points\\(cfg\\)\\)\n\" && python -m unittest discover -s test -p \"test_sweep\\.py\" -v 2>&1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^cd /c/Programmierung/River_crossing && source \\.venv/Scripts/activate && python -c \"\nfrom pathlib import Path\nfrom experiments\\.sweep import load_sweep_config, sweep_points, run_sweep\nfrom core\\.config_loader import load_algorithm_config\n\nconfig_dir = Path\\('configs'\\)\nanalysis_dir = Path\\('analysis'\\)\nsweep_cfg = load_sweep_config\\(config_dir / 'sweep\\.yaml'\\)\nalgo_cfg = load_algorithm_config\\(config_dir / 'algorithm\\.yaml'\\)\n\ngen = run_sweep\\(sweep_cfg=sweep_cfg, base_algo_cfg=algo_cfg, config_dir=config_dir, analysis_dir=analysis_dir\\)\ncount = 0\ntry:\n    while True:\n        p = next\\(gen\\)\n        count \\+= 1\n        print\\(f'\\[\\{count\\}\\] \\{\\\\\"cached\\\\\" if p\\[\\\\\"cached\\\\\"\\] else \\\\\"ran\\\\\"\\}: \\{p\\[\\\\\"exp_id\\\\\"\\]\\}'\\)\n        if count >= 12:\n            break\nexcept StopIteration as e:\n    print\\('Done'\\)\nexcept Exception as e:\n    import traceback\n    traceback\\.print_exc\\(\\)\n\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

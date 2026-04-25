@@ -57,11 +57,18 @@ def run_all_experiments(
     flow_config_override: dict | None = None,
     impact_override: float | None = None,
     inertia_override: int | None = None,
+    algorithms_override: list[str] | None = None,
 ) -> list[ExperimentRunRecord]:
     """Run the configured batch of experiments and optionally save raw results.
 
     Results are stored as a flat list of per-run records to keep downstream
     evaluation and serialization straightforward.
+
+    Parameters
+    ----------
+    algorithms_override:
+        When provided, only run these algorithms instead of the full list from
+        ``experiment.yaml``.  Pass a single-element list to run one algorithm.
     """
     config_dir = Path(config_dir)
     algo_cfg = load_algorithm_config(config_dir / "algorithm.yaml")
@@ -76,6 +83,8 @@ def run_all_experiments(
             or 200
         )
 
+    algorithms_to_run = algorithms_override if algorithms_override is not None else list(exp_cfg["algorithms"])
+
     results: list[ExperimentRunRecord] = []
 
     for env_entry in exp_cfg["environments"]:
@@ -84,7 +93,7 @@ def run_all_experiments(
             env_cfg = dict(env_cfg)
             env_cfg["flow"] = dict(flow_config_override)
 
-        for algorithm in exp_cfg["algorithms"]:
+        for algorithm in algorithms_to_run:
             for seed in exp_cfg["seeds"]:
                 env = RiverEnvironment.from_config(env_cfg)
                 effective_algo_cfg = _algo_config_with_impact(algo_cfg, impact_override)

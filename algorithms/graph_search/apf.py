@@ -52,7 +52,8 @@ def _valid_goal_predecessors(env: RiverEnvironment) -> list[State]:
         candidate = State(env.goal.i - action[0], env.goal.j - action[1])
         if not env.grid.contains(candidate):
             continue
-        if env.transition(candidate, action) == env.goal and env.is_goal(env.goal, action):
+        next_state = State(candidate.i + action[0], candidate.j + action[1])
+        if next_state == env.goal and env.is_goal(env.goal, action):
             predecessors.append(candidate)
     return list(dict.fromkeys(predecessors))
 

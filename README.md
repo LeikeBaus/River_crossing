@@ -420,3 +420,8 @@ Every result file is named with a structured ID:
 [{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}][-e{N}]-S{seeds}
 ```
 The `e{N}` token encodes the Q-learning episode count (e.g. `e200`, `e500`, `e1500`); it is omitted when the default value of 1200 is used. Raw results use the prefix `R-`, evaluations use `EV-`.
+
+## 11. Tests
+```bash
+python -m test.test_file
+```

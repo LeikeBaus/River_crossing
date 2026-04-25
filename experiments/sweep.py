@@ -22,7 +22,7 @@ from typing import Any
 
 import yaml
 
-from core.config_loader import load_algorithm_config, load_env_config
+from core.config_loader import load_algorithm_config
 from experiments.evaluator import evaluate_results
 from experiments.experiment_id import build_experiment_id, results_paths
 from experiments.runner import (
@@ -182,8 +182,10 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
 
 
 def count_sweep_points(sweep_cfg: dict[str, Any]) -> int:
-    """Return the total number of sweep points without running anything."""
-    return sum(1 for _ in sweep_points(sweep_cfg))
+    """Return the total number of (algorithm × parameter) steps in the sweep."""
+    n_points = sum(1 for _ in sweep_points(sweep_cfg))
+    n_algorithms = len(list(sweep_cfg.get("algorithms", ["dijkstra"])))
+    return n_points * max(1, n_algorithms)
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +195,22 @@ def count_sweep_points(sweep_cfg: dict[str, Any]) -> int:
 
 @dataclass
 class SweepResult:
-    """Result record for one completed or cached sweep point."""
+    """Result record for one completed or cached (algorithm, sweep-point) step.
+
+    Each step produces one result file per algorithm, named with the algorithm
+    abbreviation as a prefix (e.g. ``R-dijk-V0100-...json``).
+    ``raw_path`` / ``ev_path`` refer to the current algorithm's files.
+    ``raw_paths`` / ``ev_paths`` accumulate all algorithms processed so far
+    within the current sweep point.
+    """
 
     point: SweepPoint
-    exp_id: str
-    raw_path: Path
-    ev_path: Path
-    cached: bool
+    exp_id: str          # base exp_id (no algo prefix) for display
+    raw_path: Path       # last algorithm's raw-results file
+    ev_path: Path        # last algorithm's evaluation file
+    raw_paths: list[Path]  # all per-algorithm raw-results files
+    ev_paths: list[Path]   # all per-algorithm evaluation files
+    cached: bool         # True only when every algorithm was already cached
     records: list[dict[str, Any]]
 
 
@@ -211,83 +222,85 @@ def run_sweep(
 ) -> Generator[dict[str, Any], None, SweepResult | None]:
     """Execute the full parameter sweep.
 
-    This is a generator that yields progress dicts for each point:
+    Yields one progress dict **per algorithm per sweep point**::
 
-        {"done": int, "total": int, "cached": bool, "exp_id": str,
-         "raw_path": str, "point": SweepPoint}
+        {"done": int, "total": int, "cached": bool,
+         "exp_id": str,   # algorithm-specific ID, e.g. "dijk-V0100-..."
+         "algorithm": str,
+         "raw_path": str,
+         "point": SweepPoint}
 
     The generator's return value (accessible via ``StopIteration.value``) is the
-    :class:`SweepResult` for the *last* computed point, or ``None`` if the sweep
-    was empty.
-
-    Usage::
-
-        gen = run_sweep(...)
-        last_result = None
-        for progress in gen:
-            ...  # update UI
-        try:
-            last_result = gen.send(None)  # should not happen after StopIteration
-        except StopIteration as exc:
-            last_result = exc.value
+    :class:`SweepResult` for the *last* processed (algorithm, point) step, or
+    ``None`` if the sweep was empty.
     """
     points = list(sweep_points(sweep_cfg))
-    total = len(points)
+    n_algorithms = len(points[0].algorithms) if points else 1
+    total = len(points) * n_algorithms
+    global_step = 0
     last_result: SweepResult | None = None
 
-    for idx, point in enumerate(points):
+    for point in points:
         effective_algo = point.build_algo_override(base_algo_cfg)
-        exp_id = build_experiment_id(
-            flow_cfg=point.flow_cfg,
-            algo_cfg=effective_algo,
-            seeds=point.seeds,
-            grid_nx=point.grid_nx,
-            grid_ny=point.grid_ny,
-            ql_episodes=point.ql_episodes,
-        )
-        raw_path, ev_path = results_paths(exp_id, analysis_dir)
 
-        if raw_path.exists():
-            records = load_experiment_results(raw_path)
-            if not ev_path.exists():
-                evaluate_results(records, output_path=ev_path)
-            cached = True
-        else:
-            # Build a minimal env config for this sweep point
-            base_env_cfg = load_env_config(config_dir / "env.yaml")
-            env_cfg = copy.deepcopy(base_env_cfg)
-            env_cfg["flow"] = dict(point.flow_cfg)
-            env_cfg["grid"] = {"nx": point.grid_nx, "ny": point.grid_ny}
+        all_records: list[dict[str, Any]] = []
+        all_raw_paths: list[Path] = []
+        all_ev_paths: list[Path] = []
 
-            # Temporarily swap experiment.yaml algorithms+seeds by using
-            # run_all_experiments with overrides
-            result_records = run_all_experiments(
-                config_dir=config_dir,
-                output_path=raw_path,
-                flow_config_override=dict(point.flow_cfg),
-                impact_override=point.beta,
-                inertia_override=point.inertia,
-                rl_episodes=point.ql_episodes,
+        for algorithm in point.algorithms:
+            global_step += 1
+            algo_exp_id = build_experiment_id(
+                flow_cfg=point.flow_cfg,
+                algo_cfg=effective_algo,
+                seeds=point.seeds,
+                algorithm=algorithm,
+                grid_nx=point.grid_nx,
+                grid_ny=point.grid_ny,
+                ql_episodes=point.ql_episodes,
             )
-            evaluate_results(result_records, output_path=ev_path)
-            records = [r.to_dict() for r in result_records]
-            cached = False
+            algo_raw_path, algo_ev_path = results_paths(algo_exp_id, analysis_dir)
+            all_raw_paths.append(algo_raw_path)
+            all_ev_paths.append(algo_ev_path)
 
-        last_result = SweepResult(
-            point=point,
-            exp_id=exp_id,
-            raw_path=raw_path,
-            ev_path=ev_path,
-            cached=cached,
-            records=records,
-        )
-        yield {
-            "done": idx + 1,
-            "total": total,
-            "cached": cached,
-            "exp_id": exp_id,
-            "raw_path": str(raw_path),
-            "point": point,
-        }
+            if algo_raw_path.exists():
+                algo_cached = True
+                algo_records = load_experiment_results(algo_raw_path)
+                if not algo_ev_path.exists():
+                    evaluate_results(algo_records, output_path=algo_ev_path)
+            else:
+                algo_cached = False
+                result_records = run_all_experiments(
+                    config_dir=config_dir,
+                    output_path=algo_raw_path,
+                    flow_config_override=dict(point.flow_cfg),
+                    impact_override=point.beta,
+                    inertia_override=point.inertia,
+                    rl_episodes=point.ql_episodes,
+                    algorithms_override=[algorithm],
+                )
+                evaluate_results(result_records, output_path=algo_ev_path)
+                algo_records = [r.to_dict() for r in result_records]
+
+            all_records.extend(algo_records)
+
+            last_result = SweepResult(
+                point=point,
+                exp_id=algo_exp_id,
+                raw_path=algo_raw_path,
+                ev_path=algo_ev_path,
+                raw_paths=list(all_raw_paths),
+                ev_paths=list(all_ev_paths),
+                cached=algo_cached,
+                records=list(all_records),
+            )
+            yield {
+                "done": global_step,
+                "total": total,
+                "cached": algo_cached,
+                "exp_id": algo_exp_id,
+                "algorithm": algorithm,
+                "raw_path": str(algo_raw_path),
+                "point": point,
+            }
 
     return last_result

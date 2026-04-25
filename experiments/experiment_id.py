@@ -22,6 +22,7 @@ i{N}        : inertia (always included)
 t{NN}       : turn_penalty × 10; **omitted when turn_penalty == 1.0**
 g{NX}x{NY} : grid dimensions; **omitted when nx=40, ny=20**
 e{N}        : Q-learning episodes (e.g. e200, e500, e1500);
+              **only included when algorithm == "q_learning" (or batch/None)**;
               **omitted when ql_episodes == 1200** (the config default)
 S{seeds}    : seed encoding:
                   contiguous  → {first}k{last}  e.g. S1k5
@@ -134,8 +135,9 @@ def build_experiment_id(
     # ── Grid (omit when default) ──────────────────────────────────────────────
     if grid_nx != _DEFAULT_NX or grid_ny != _DEFAULT_NY:
         parts.append(f"g{grid_nx}x{grid_ny}")
-    # ── Q-learning episodes (omit when default 1200) ───────────────────────────
-    if int(ql_episodes) != 1200:
+    # ── Q-learning episodes (only relevant for q_learning; omit when default 1200) ──
+    # For batch runs (algorithm=None) still encode so the file covers the ql variant.
+    if (algorithm is None or algorithm == "q_learning") and int(ql_episodes) != 1200:
         parts.append(f"e{int(ql_episodes)}")
     # ── Seeds ─────────────────────────────────────────────────────────────────
     seeds_sorted = sorted(set(int(s) for s in seeds))

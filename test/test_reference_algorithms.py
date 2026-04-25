@@ -352,12 +352,18 @@ class TestDijkstraVsValueIteration(unittest.TestCase):
 
     def test_from_project_config(self) -> None:
         """Agreement on the default project scenario (40×20 grid)."""
+        import copy
         from pathlib import Path
         from core.config_loader import load_all_configs
 
         env_cfg, algo_cfg, _ = load_all_configs(Path("configs"))
         env = RiverEnvironment.from_config(env_cfg)
-        cost_fn = CostFunction.from_config(algo_cfg, env.flow)
+
+        # Zero out inertia so Dijkstra and Value Iteration use the same
+        # (history-free) cost function and their optimal costs are comparable.
+        algo_cfg_cmp = copy.deepcopy(algo_cfg)
+        algo_cfg_cmp["common"]["inertia"] = 0
+        cost_fn = CostFunction.from_config(algo_cfg_cmp, env.flow)
 
         d_result = dijkstra(env, cost_fn)
         vi_result = ValueIterationResult.from_config(env, cost_fn, algo_cfg["dynamic_programming"])

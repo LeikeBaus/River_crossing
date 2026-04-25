@@ -306,15 +306,16 @@ class TestRiverEnvironment(unittest.TestCase):
         self.assertIn((0, 1), valid)
         self.assertIn((1, 1), valid)
 
-    def test_valid_actions_at_start_require_diagonal_departure(self) -> None:
+    def test_valid_actions_at_start_exclude_land(self) -> None:
         env = self._make_env(start=State(2, 10))
         valid = set(env.valid_actions(env.start))
 
+        # All in-bounds, non-land directions are valid (no diagonal-only constraint).
         self.assertIn((1, 1), valid)
         self.assertIn((1, -1), valid)
-        self.assertNotIn((1, 0), valid)
-        self.assertNotIn((0, 1), valid)
-        self.assertNotIn((0, -1), valid)
+        self.assertIn((1, 0), valid)
+        self.assertIn((0, 1), valid)
+        self.assertIn((0, -1), valid)
         self.assertNotIn((-1, 0), valid)  # left side is land
 
     def test_valid_actions_non_start_do_not_use_angle_filter(self) -> None:
@@ -337,23 +338,25 @@ class TestRiverEnvironment(unittest.TestCase):
         with self.assertRaises(ValueError):
             env.transition(State(2, 10), (-1, 0))
 
-    def test_transition_non_diagonal_from_start_raises(self) -> None:
+    def test_transition_non_diagonal_from_start_permitted(self) -> None:
+        # Non-diagonal departure from start is permitted; goal-arrival is
+        # validated by angle bounds in is_goal(), not in transition().
         env = self._make_env(start=State(2, 10), goal=State(37, 10))
-        with self.assertRaises(ValueError):
-            env.transition(env.start, (1, 0))
+        next_state = env.transition(env.start, (1, 0))
+        self.assertEqual(next_state, State(3, 10))
 
     def test_is_goal_requires_correct_position_and_angle(self) -> None:
         env = self._make_env()
         goal = State(37, 10)
-        # Valid: at goal, any diagonal move.
-        self.assertTrue(env.is_goal(goal, (1, 1)))
-        self.assertTrue(env.is_goal(goal, (1, -1)))
-        self.assertTrue(env.is_goal(goal, (-1, -1)))
-        # Invalid: wrong position
+        # Valid: at goal, approach angle within docking range [30°, 60°].
+        self.assertTrue(env.is_goal(goal, (1, 1)))    # 45° — in range
+        self.assertTrue(env.is_goal(goal, (-1, 1)))   # 45° — in range
+        # Invalid: wrong position.
         self.assertFalse(env.is_goal(State(36, 10), (1, 1)))
-        # Invalid: at goal but non-diagonal move.
-        self.assertFalse(env.is_goal(goal, (0, 1)))
-        self.assertFalse(env.is_goal(goal, (1, 0)))
+        # Invalid: approach angle outside [30°, 60°].
+        self.assertFalse(env.is_goal(goal, (1, -1)))  # 135° — out of range
+        self.assertFalse(env.is_goal(goal, (0, 1)))   # 0°  — out of range
+        self.assertFalse(env.is_goal(goal, (1, 0)))   # 90° — out of range
 
     def test_actions_property(self) -> None:
         env = self._make_env()
