@@ -7,6 +7,7 @@ seeds: [1]
 
 # Algorithm selection — all available algorithms
 algorithms:
+
   - dijkstra
   - a_star
   - weighted_a_star
@@ -39,7 +40,7 @@ alpha: 1.0
 beta: 1.0
 
 # Inertia values (heading-history depth)
-inertias: [0, 1, 2, 3, 4]
+inertias: [0, 1, 2, 3]
 
 # Q-learning episodes — three options
 ql_episodes: [200, 500, 1500]

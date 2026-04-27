@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Any
@@ -138,6 +139,32 @@ def q_learning_train(
     def set_q(s: State, hist: tuple, a: Action, value: float) -> None:
         q_table.setdefault(_q_key(s, hist), {})[a] = value
 
+    # ------------------------------------------------------------------
+    # Precompute environment-constant data to avoid redundant work inside
+    # the hot episode loop.
+    # ------------------------------------------------------------------
+    _guidance_tgts: tuple[State, ...] = _guidance_targets(env)
+    _all_states = [
+        State(i, j)
+        for i in range(env.grid.nx)
+        for j in range(env.grid.ny)
+    ]
+    _dist_map: dict[State, float] = {
+        s: min(math.hypot(s.i - t.i, s.j - t.j) for t in _guidance_tgts)
+        for s in _all_states
+    }
+    _avail_cache: dict[State, tuple[Action, ...]] = {}
+
+    def _get_avail(s: State) -> tuple[Action, ...]:
+        hit = _avail_cache.get(s)
+        if hit is None:
+            hit = _available_actions(env, s)
+            _avail_cache[s] = hit
+        return hit
+
+    def _get_dist(s: State) -> float:
+        return _dist_map.get(s, 0.0)
+
     epsilon = epsilon_start
     reward_history: list[float] = []
     success_history: list[bool] = []
@@ -157,7 +184,7 @@ def q_learning_train(
 
         for _step in range(max_steps_per_episode):
             steps += 1
-            actions = _available_actions(env, state)
+            actions = _get_avail(state)
             if not actions:
                 break
 
@@ -165,8 +192,8 @@ def q_learning_train(
             action = _epsilon_greedy_action(q_table, q_key, actions, epsilon, rng)
             next_state = env.transition(state, action)
 
-            current_distance = _guidance_distance(env, state)
-            next_distance = _guidance_distance(env, next_state)
+            current_distance = _get_dist(state)
+            next_distance = _get_dist(next_state)
             reward = -cost_fn.with_history(state, action, history)
             reward += progress_reward_scale * (current_distance - next_distance)
             reward -= revisit_penalty * visited_counts.get(next_state, 0)
@@ -182,7 +209,7 @@ def q_learning_train(
             visited_counts[next_state] = visited_counts.get(next_state, 0) + 1
 
             new_history: tuple = (history + (action,))[-inertia:] if inertia > 0 else ()
-            next_actions = _available_actions(env, next_state)
+            next_actions = _get_avail(next_state)
             next_q_key = _q_key(next_state, new_history)
             max_next_q = max((q_table.get(next_q_key, {}).get(a2, 0.0) for a2 in next_actions), default=0.0)
 

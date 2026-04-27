@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,12 +31,10 @@ def attractive_potential(
     state: State,
     goal: State,
     k_att: float,
-    target: State | None = None,
 ) -> float:
-    """Return the attractive potential ``0.5 * k_att * ||s - s_target||^2``."""
-    target_state = goal if target is None else target
-    di = state.i - target_state.i
-    dj = state.j - target_state.j
+    """Return the attractive potential ``0.5 * k_att * ||s - s_goal||^2``."""
+    di = state.i - goal.i
+    dj = state.j - goal.j
     return 0.5 * k_att * (di * di + dj * dj)
 
 
@@ -45,47 +44,31 @@ def flow_potential(env: RiverEnvironment, state: State, lambda_flow: float) -> f
     return -lambda_flow * (state.i * vi + state.j * vj)
 
 
-def _valid_goal_predecessors(env: RiverEnvironment) -> list[State]:
-    """Return in-grid states from which the goal can be reached validly in one step."""
-    predecessors: list[State] = []
-    for action in env.actions:
-        candidate = State(env.goal.i - action[0], env.goal.j - action[1])
-        if not env.grid.contains(candidate):
-            continue
-        next_state = State(candidate.i + action[0], candidate.j + action[1])
-        if next_state == env.goal and env.is_goal(env.goal, action):
-            predecessors.append(candidate)
-    return list(dict.fromkeys(predecessors))
+def _docking_approach_penalty(env: RiverEnvironment, state: State, k_dock: float) -> float:
+    """Penalise approach angles misaligned with valid docking directions.
 
+    Returns 0 when *state* is on a valid approach corridor toward the goal,
+    rising toward ``2 * k_dock`` when approaching from the exact opposite side.
+    """
+    if state == env.goal or k_dock <= 0.0:
+        return 0.0
 
-def _guidance_target(env: RiverEnvironment, state: State) -> State:
-    """Choose a docking-aware subgoal that guides APF into a valid approach corridor."""
-    predecessors = _valid_goal_predecessors(env)
-    if not predecessors or state in predecessors:
-        return env.goal
+    valid_approach = [a for a in env.actions if env.is_goal(env.goal, a)]
+    if not valid_approach:
+        return 0.0
 
-    return min(
-        predecessors,
-        key=lambda item: (
-            (item.i - state.i) ** 2 + (item.j - state.j) ** 2,
-            abs(item.j - env.goal.j),
-            item.i,
-            item.j,
-        ),
+    di = env.goal.i - state.i
+    dj = env.goal.j - state.j
+    dist = math.hypot(di, dj)
+    if dist < 1e-9:
+        return 0.0
+
+    best_cos = max(
+        (a[0] * di + a[1] * dj) / (dist * math.hypot(a[0], a[1]))
+        for a in valid_approach
+        if math.hypot(a[0], a[1]) > 1e-9
     )
-
-
-def _docking_distance_penalty(env: RiverEnvironment, state: State) -> float:
-    """Penalize states that are still far away from a valid final docking predecessor."""
-    if state == env.goal:
-        return 0.0
-
-    predecessors = _valid_goal_predecessors(env)
-    if not predecessors:
-        return 0.0
-
-    best_sq_distance = min((state.i - item.i) ** 2 + (state.j - item.j) ** 2 for item in predecessors)
-    return 0.05 * float(best_sq_distance)
+    return k_dock * (1.0 - best_cos)
 
 
 def total_potential(
@@ -93,10 +76,9 @@ def total_potential(
     state: State,
     k_att: float,
     lambda_flow: float,
-    target: State | None = None,
 ) -> float:
     """Return the total potential ``Phi_att + Phi_flow`` at *state*."""
-    return attractive_potential(state, env.goal, k_att, target=target) + flow_potential(env, state, lambda_flow)
+    return attractive_potential(state, env.goal, k_att) + flow_potential(env, state, lambda_flow)
 
 
 def potential_gradient(
@@ -104,7 +86,6 @@ def potential_gradient(
     state: State,
     k_att: float,
     lambda_flow: float,
-    target: State | None = None,
 ) -> tuple[float, float]:
     """Return the discrete APF gradient under the current constant-flow model.
 
@@ -114,10 +95,9 @@ def potential_gradient(
 
     which is exact for spatially constant flow fields.
     """
-    target_state = env.goal if target is None else target
     vi, vj = env.flow_at(state)
-    grad_i = k_att * (state.i - target_state.i) - lambda_flow * vi
-    grad_j = k_att * (state.j - target_state.j) - lambda_flow * vj
+    grad_i = k_att * (state.i - env.goal.i) - lambda_flow * vi
+    grad_j = k_att * (state.j - env.goal.j) - lambda_flow * vj
     return (grad_i, grad_j)
 
 
@@ -126,6 +106,7 @@ def select_apf_action(
     state: State,
     k_att: float,
     lambda_flow: float,
+    k_dock: float = 0.3,
 ) -> Action | None:
     """Select the best discrete action by descending along the potential field.
 
@@ -133,8 +114,7 @@ def select_apf_action(
     Ties are broken by lower next-state potential and then lexicographically.
     Invalid arrivals at the goal are excluded.
     """
-    target = _guidance_target(env, state)
-    gradient = potential_gradient(env, state, k_att, lambda_flow, target=target)
+    gradient = potential_gradient(env, state, k_att, lambda_flow)
     candidates: list[tuple[float, float, Action]] = []
 
     for action in env.valid_actions(state):
@@ -145,10 +125,10 @@ def select_apf_action(
             continue
 
         directional_derivative = action[0] * gradient[0] + action[1] * gradient[1]
-        next_potential = total_potential(env, next_state, k_att, lambda_flow, target=target)
-        docking_penalty = _docking_distance_penalty(env, next_state)
+        next_potential = total_potential(env, next_state, k_att, lambda_flow)
+        dock_penalty = _docking_approach_penalty(env, next_state, k_dock)
         candidates.append(
-            (directional_derivative + docking_penalty, next_potential + docking_penalty, action)
+            (directional_derivative + dock_penalty, next_potential + dock_penalty, action)
         )
 
     if not candidates:
@@ -163,6 +143,7 @@ def apf_plan(
     cost_fn: CostFunction,
     k_att: float = 1.0,
     lambda_flow: float = 0.2,
+    k_dock: float = 0.3,
     max_steps: int | None = None,
 ) -> APFResult:
     """Plan greedily with an artificial potential field.
@@ -176,6 +157,8 @@ def apf_plan(
         raise ValueError(f"k_att must be > 0, got {k_att}.")
     if lambda_flow < 0:
         raise ValueError(f"lambda_flow must be >= 0, got {lambda_flow}.")
+    if k_dock < 0:
+        raise ValueError(f"k_dock must be >= 0, got {k_dock}.")
 
     if max_steps is None:
         max_steps = 4 * env.grid.nx * env.grid.ny
@@ -201,7 +184,7 @@ def apf_plan(
             )
 
         current_potential = total_potential(env, state, k_att, lambda_flow)
-        action = select_apf_action(env, state, k_att, lambda_flow)
+        action = select_apf_action(env, state, k_att, lambda_flow, k_dock=k_dock)
         if action is None:
             return APFResult(
                 path=path,
@@ -257,4 +240,5 @@ def apf_from_config(
         cost_fn,
         k_att=float(apf_config.get("k_att", 1.0)),
         lambda_flow=float(apf_config.get("lambda_flow", 0.2)),
+        k_dock=float(apf_config.get("k_dock", 0.3)),
     )

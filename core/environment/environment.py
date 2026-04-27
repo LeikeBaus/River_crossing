@@ -73,6 +73,9 @@ class RiverEnvironment:
         self.start = start
         self.goal = goal
         self.docking = docking
+        # Cache for valid_actions: the grid and land/water layout are static,
+        # so the result for a given state never changes.
+        self._valid_actions_cache: dict[State, tuple[Action, ...]] = {}
 
     # ------------------------------------------------------------------
     # Factory
@@ -116,9 +119,38 @@ class RiverEnvironment:
         return ACTIONS
 
     def valid_actions(self, state: State) -> tuple[Action, ...]:
-        """Return valid actions that stay in-bounds and in the water corridor."""
-        actions = tuple(a for a in self.actions if is_action_valid(state, a, self.grid))
-        return tuple(a for a in actions if not self.is_land(apply_action(state, a, self.grid)))
+        """Return valid actions that stay in-bounds and in the water corridor.
+
+        Additional geometric constraints (cached together with boundary checks):
+        - From the **start** position only diagonal actions are permitted
+          (the ship must enter the river at an angle).
+        - The **goal** cell can only be reached via diagonal actions
+          (docking approach angle requirement).
+        """
+        cached = self._valid_actions_cache.get(state)
+        if cached is not None:
+            return cached
+
+        is_start = (state == self.start)
+        result_list: list[Action] = []
+        for a in self.actions:
+            di, dj = a
+            # Diagonal-only departure from start
+            if is_start and (di == 0 or dj == 0):
+                continue
+            if not is_action_valid(state, a, self.grid):
+                continue
+            next_s = apply_action(state, a, self.grid)
+            if self.is_land(next_s):
+                continue
+            # Diagonal-only arrival at goal
+            if next_s == self.goal and (di == 0 or dj == 0):
+                continue
+            result_list.append(a)
+
+        result = tuple(result_list)
+        self._valid_actions_cache[state] = result
+        return result
 
     def transition(self, state: State, action: Action) -> State:
         """Apply *action* to *state* and return the next state.

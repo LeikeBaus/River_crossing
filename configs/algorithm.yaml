@@ -5,14 +5,17 @@ common:
   turn_penalty: 1.0 # multiplier for the turn cost term
   version: 0.100 # version number for experiment tracking and reproducibility
 
-dijkstra: {}
+dijkstra:
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
 
 a_star:
   heuristic: euclidean # heuristic function for A* algorithm
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
 
 weighted_a_star:
   heuristic: euclidean # heuristic function for weighted A* algorithm
   weight: 1.5 # weight for the heuristic function
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
 
 dynamic_programming:
   gamma: 1.0 # discount factor for dynamic programming
@@ -22,6 +25,7 @@ dynamic_programming:
 apf:
   k_att: 1.0 # attractive force gain
   lambda_flow: 0.2 # flow field influence
+  k_dock: 0.3 # docking alignment penalty weight (0 = disabled)
 
 q_learning:
   episodes: 1200 # number of training episodes

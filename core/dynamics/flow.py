@@ -89,10 +89,15 @@ class GaussianFlow(FlowField):
         self._ic = (nx - 1) / 2.0
         self._sigma = max(sigma, 1e-6)
         self._floor = max(1e-3, min(0.999, floor_frac))
+        # Precompute per-column scale factors once; at() becomes an O(1) list
+        # lookup instead of calling exp() on every flow query.
+        self._col_scale: list[float] = [
+            self._floor + (1.0 - self._floor) * math.exp(-0.5 * ((i - self._ic) / self._sigma) ** 2)
+            for i in range(nx)
+        ]
 
     def at(self, state: "State") -> FlowVector:
-        g = math.exp(-0.5 * ((state.i - self._ic) / self._sigma) ** 2)
-        scale = self._floor + (1.0 - self._floor) * g
+        scale = self._col_scale[state.i]
         return (self._vi * scale, self._vj * scale)
 
     def __repr__(self) -> str:

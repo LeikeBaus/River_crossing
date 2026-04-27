@@ -246,7 +246,7 @@ def _run_single_experiment(
 
     if algorithm == "dijkstra":
         t0 = time.perf_counter()
-        plan = dijkstra(env, cost_fn)
+        plan = dijkstra(env, cost_fn, max_snapshots=int(algo_cfg.get("dijkstra", {}).get("max_snapshots", 500)))
         plan_time = time.perf_counter() - t0
         return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 

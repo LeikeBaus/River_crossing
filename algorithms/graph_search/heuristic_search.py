@@ -16,6 +16,7 @@ def astar(
     env: RiverEnvironment,
     cost_fn: CostFunction,
     heuristic: str = "euclidean",
+    max_snapshots: int = 500,
 ) -> PlanResult:
     """Run A* search with admissible heuristic weighting (w = 1).
 
@@ -27,8 +28,10 @@ def astar(
         Transition-cost function.
     heuristic:
         Name of heuristic function. Currently supports ``"euclidean"``.
+    max_snapshots:
+        Maximum number of exploration-path snapshots to store.
     """
-    return weighted_astar(env, cost_fn, weight=1.0, heuristic=heuristic)
+    return weighted_astar(env, cost_fn, weight=1.0, heuristic=heuristic, max_snapshots=max_snapshots)
 
 
 def weighted_astar(
@@ -36,6 +39,7 @@ def weighted_astar(
     cost_fn: CostFunction,
     weight: float = 1.5,
     heuristic: str = "euclidean",
+    max_snapshots: int = 500,
 ) -> PlanResult:
     """Run Weighted A* search with ``f(s) = g(s) + w * h(s)``.
 
@@ -51,6 +55,10 @@ def weighted_astar(
         Heuristic inflation factor (must be >= 1).
     heuristic:
         Name of heuristic function. Currently supports ``"euclidean"``.
+    max_snapshots:
+        Maximum number of exploration-path snapshots to store.  Snapshots are
+        sampled so memory and reconstruction time stay bounded even with large
+        inertia state spaces.
     """
     if weight < 1.0:
         raise ValueError(f"weight must be >= 1, got {weight}.")
@@ -75,6 +83,7 @@ def weighted_astar(
 
     nodes_expanded = 0
     exploration_path: list[list[State]] = []
+    _snap_stride = max(1, inertia ** 2) if inertia > 1 else 1
 
     while heap:
         f_curr, g_curr, _, state, history = heapq.heappop(heap)
@@ -86,15 +95,16 @@ def weighted_astar(
 
         nodes_expanded += 1
 
-        # Record partial path snapshot from start to this expansion frontier.
-        snapshot: list[State] = []
-        cur_node = node
-        while cur_node in prev:
-            snapshot.append(cur_node[0])
-            cur_node, _ = prev[cur_node]
-        snapshot.append(start)
-        snapshot.reverse()
-        exploration_path.append(snapshot)
+        # Record partial path snapshot, sampled to stay within max_snapshots.
+        if nodes_expanded % _snap_stride == 0 and len(exploration_path) < max_snapshots:
+            snapshot: list[State] = []
+            cur_node = node
+            while cur_node in prev:
+                snapshot.append(cur_node[0])
+                cur_node, _ = prev[cur_node]
+            snapshot.append(start)
+            snapshot.reverse()
+            exploration_path.append(snapshot)
 
         if state == goal:
             return _reconstruct_result_hist(start, node, prev, g_score[node], nodes_expanded, exploration_path)
@@ -130,7 +140,8 @@ def astar_from_config(
 ) -> PlanResult:
     """Run A* using config section ``a_star`` from algorithm config."""
     heuristic = str(a_star_config.get("heuristic", "euclidean"))
-    return astar(env, cost_fn, heuristic=heuristic)
+    max_snapshots = int(a_star_config.get("max_snapshots", 500))
+    return astar(env, cost_fn, heuristic=heuristic, max_snapshots=max_snapshots)
 
 
 def weighted_astar_from_config(
@@ -141,7 +152,8 @@ def weighted_astar_from_config(
     """Run Weighted A* using config section ``weighted_a_star``."""
     heuristic = str(weighted_cfg.get("heuristic", "euclidean"))
     weight = float(weighted_cfg.get("weight", 1.5))
-    return weighted_astar(env, cost_fn, weight=weight, heuristic=heuristic)
+    max_snapshots = int(weighted_cfg.get("max_snapshots", 500))
+    return weighted_astar(env, cost_fn, weight=weight, heuristic=heuristic, max_snapshots=max_snapshots)
 
 
 def run_weighted_astar_sweep(

@@ -243,7 +243,6 @@ def run_sweep(
     for point in points:
         effective_algo = point.build_algo_override(base_algo_cfg)
 
-        all_records: list[dict[str, Any]] = []
         all_raw_paths: list[Path] = []
         all_ev_paths: list[Path] = []
 
@@ -264,9 +263,10 @@ def run_sweep(
 
             if algo_raw_path.exists():
                 algo_cached = True
-                algo_records = load_experiment_results(algo_raw_path)
                 if not algo_ev_path.exists():
+                    algo_records = load_experiment_results(algo_raw_path)
                     evaluate_results(algo_records, output_path=algo_ev_path)
+                algo_records = []  # don't keep in memory; UI loads from disk on demand
             else:
                 algo_cached = False
                 result_records = run_all_experiments(
@@ -281,8 +281,6 @@ def run_sweep(
                 evaluate_results(result_records, output_path=algo_ev_path)
                 algo_records = [r.to_dict() for r in result_records]
 
-            all_records.extend(algo_records)
-
             last_result = SweepResult(
                 point=point,
                 exp_id=algo_exp_id,
@@ -291,7 +289,7 @@ def run_sweep(
                 raw_paths=list(all_raw_paths),
                 ev_paths=list(all_ev_paths),
                 cached=algo_cached,
-                records=list(all_records),
+                records=algo_records,  # only the current algo's records (or [] if cached)
             )
             yield {
                 "done": global_step,

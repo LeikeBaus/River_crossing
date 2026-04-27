@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QObject, QPointF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPolygonF, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -21,14 +21,12 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
     QRadioButton,
     QScrollArea,
-    QSlider,
     QSpinBox,
     QStatusBar,
     QTabWidget,
@@ -819,11 +817,11 @@ class ControlPanel(QWidget):
         self.speed.setSuffix("x")
 
         self.inertia_spin = QSpinBox()
-        self.inertia_spin.setRange(0, 5)
+        self.inertia_spin.setRange(0, 3)
         self.inertia_spin.setValue(2)
         self.inertia_spin.setToolTip(
             "Number of past steps that form the reference heading for turn cost.\n"
-            "0 = no turn penalty, 1 = only last step, 5 = last 5 steps (more arc-like paths)."
+            "0 = no turn penalty, 1 = only last step, 4 = last 4 steps (more arc-like paths)."
         )
 
         self.ql_episodes_combo = QComboBox()
@@ -839,13 +837,9 @@ class ControlPanel(QWidget):
         self.flow_dir_up = QRadioButton("↑  Bottom → Top")
         self.flow_dir_up.setChecked(True)
 
-        self.flow_strength_slider = QSlider(Qt.Orientation.Horizontal)
-        self.flow_strength_slider.setRange(0, 10)
-        self.flow_strength_slider.setSingleStep(5)
-        self.flow_strength_slider.setValue(10)
-
-        self.flow_strength_edit = QLineEdit("1.0")
-        self.flow_strength_edit.setMaximumWidth(100)
+        self.flow_strength_combo = QComboBox()
+        self.flow_strength_combo.addItems(["0.0", "0.5", "1.0"])
+        self.flow_strength_combo.setCurrentText("1.0")
 
         # Gaussian-only parameters
         self.flow_sigma_spin = QDoubleSpinBox()
@@ -902,8 +896,7 @@ class ControlPanel(QWidget):
 
         self.flow_dir_down.toggled.connect(lambda _: self.redraw_requested.emit())
         self.flow_dir_up.toggled.connect(lambda _: self.redraw_requested.emit())
-        self.flow_strength_slider.valueChanged.connect(self._on_flow_strength_changed)
-        self.flow_strength_edit.editingFinished.connect(self._on_strength_line_edit_changed)
+        self.flow_strength_combo.currentIndexChanged.connect(lambda _: self.redraw_requested.emit())
         self.flow_impact_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
         self.flow_sigma_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
         self.flow_floor_spin.valueChanged.connect(lambda _: self.redraw_requested.emit())
@@ -926,12 +919,9 @@ class ControlPanel(QWidget):
         dir_layout.addWidget(self.flow_dir_up)
         layout.addLayout(dir_layout)
 
-        layout.addWidget(QLabel("Flow strength"))
-        layout.addWidget(self.flow_strength_slider)
-
-        flow_values = QFormLayout()
-        flow_values.addRow("strength", self.flow_strength_edit)
-        layout.addLayout(flow_values)
+        flow_strength_form = QFormLayout()
+        flow_strength_form.addRow("Flow strength", self.flow_strength_combo)
+        layout.addLayout(flow_strength_form)
         layout.addWidget(self._gaussian_params_widget)
 
         impact_form = QFormLayout()
@@ -967,8 +957,10 @@ class ControlPanel(QWidget):
         else:
             self.flow_dir_up.setChecked(True)
 
-        self.flow_strength_slider.setValue(int(round(min(strength, 1.0) * 10.0)))
-        self.flow_strength_edit.setText(f"{min(strength, 1.0):.1f}")
+        # Snap to nearest valid ComboBox option (0.0, 0.5, 1.0).
+        clamped = min(strength, 1.0)
+        closest = min([0.0, 0.5, 1.0], key=lambda v: abs(v - clamped))
+        self.flow_strength_combo.setCurrentText(f"{closest:.1f}")
 
         sigma = float(flow_cfg.get("sigma", 5.0))
         floor_pct = float(flow_cfg.get("floor", 0.1)) * 100.0
@@ -977,30 +969,9 @@ class ControlPanel(QWidget):
         self._updating_flow_controls = False
 
     def flow_vector(self) -> tuple[float, float]:
-        strength = self.flow_strength_slider.value() / 10.0
+        strength = float(self.flow_strength_combo.currentText())
         vj = -strength if self.flow_dir_down.isChecked() else strength
         return (0.0, vj)
-
-    def _on_flow_strength_changed(self, value: int) -> None:
-        if self._updating_flow_controls:
-            return
-        self._updating_flow_controls = True
-        self.flow_strength_edit.setText(f"{value / 10.0:.1f}")
-        self._updating_flow_controls = False
-        self.redraw_requested.emit()
-
-    def _on_strength_line_edit_changed(self) -> None:
-        if self._updating_flow_controls:
-            return
-        try:
-            strength = max(0.0, min(1.0, float(self.flow_strength_edit.text())))
-        except ValueError:
-            return
-        self._updating_flow_controls = True
-        self.flow_strength_slider.setValue(int(round(strength * 10.0)))
-        self.flow_strength_edit.setText(f"{strength:.1f}")
-        self._updating_flow_controls = False
-        self.redraw_requested.emit()
 
     def selection_state(self) -> UISelectionState:
         return UISelectionState(
@@ -1019,13 +990,134 @@ class ControlPanel(QWidget):
         )
 
 
+class FlowProfileWidget(QWidget):
+    """2-D line chart showing flow magnitude vs. x-column position."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._data: list[tuple[float, float]] = []  # (x_col, magnitude)
+        self._start_i: int = 0
+        self._goal_i: int = 39
+        self.setMinimumHeight(110)
+        self.setToolTip("Flow strength distribution across the grid x-axis")
+
+    def set_data(
+        self,
+        data: list[tuple[float, float]],
+        start_i: int,
+        goal_i: int,
+    ) -> None:
+        self._data = data
+        self._start_i = start_i
+        self._goal_i = goal_i
+        self.update()
+
+    def paintEvent(self, event: Any) -> None:  # noqa: ANN401
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        ml, mr, mt, mb = 34, 6, 8, 24
+        pw, ph = w - ml - mr, h - mt - mb
+
+        if not self._data or pw <= 4 or ph <= 4:
+            painter.drawText(
+                QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "No flow data"
+            )
+            painter.end()
+            return
+
+        max_x = max(d[0] for d in self._data)
+        max_y = max(d[1] for d in self._data)
+        if max_y < 1e-9:
+            max_y = 1.0
+
+        def to_px(x: float, y: float) -> tuple[float, float]:
+            px = ml + (x / max_x) * pw if max_x > 0 else ml
+            py = mt + ph - (y / max_y) * ph
+            return px, py
+
+        # Background
+        painter.fillRect(ml, mt, pw, ph, QColor("#F0F7FF"))
+
+        # Water corridor shading
+        x0_px = ml + (self._start_i / max_x) * pw if max_x > 0 else ml
+        x1_px = ml + (self._goal_i / max_x) * pw if max_x > 0 else ml + pw
+        corridor = QColor("#D6E6F2")
+        painter.fillRect(QRectF(x0_px, mt, x1_px - x0_px, ph), corridor)
+
+        # Filled area under curve
+        pts = [QPointF(*to_px(x, y)) for x, y in self._data]
+        if pts:
+            base_y = float(mt + ph)
+            fill_pts = [QPointF(pts[0].x(), base_y)] + pts + [QPointF(pts[-1].x(), base_y)]
+            fill_color = QColor("#3B82F6")
+            fill_color.setAlpha(55)
+            painter.setBrush(QBrush(fill_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawPolygon(QPolygonF(fill_pts))
+
+        # Line
+        line_pen = QPen(QColor("#1D4ED8"))
+        line_pen.setWidthF(1.6)
+        line_pen.setCosmetic(True)
+        painter.setPen(line_pen)
+        for i in range(len(pts) - 1):
+            painter.drawLine(pts[i], pts[i + 1])
+
+        # Border
+        border_pen = QPen(QColor("#94A3B8"))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(ml, mt, pw, ph)
+
+        # Axis ticks & labels
+        painter.setFont(QFont("Segoe UI", 7))
+        axis_pen = QPen(QColor("#64748B"))
+        painter.setPen(axis_pen)
+
+        n_xticks = min(5, int(max_x))
+        for t in range(n_xticks + 1):
+            xv = max_x * t / n_xticks
+            px = ml + (xv / max_x) * pw if max_x > 0 else ml
+            painter.drawLine(QPointF(px, mt + ph), QPointF(px, mt + ph + 3))
+            painter.drawText(
+                QRectF(px - 12, mt + ph + 4, 24, 14),
+                Qt.AlignmentFlag.AlignCenter,
+                str(int(round(xv))),
+            )
+
+        for t in range(3):
+            yv = max_y * t / 2
+            _, py = to_px(0, yv)
+            painter.drawLine(QPointF(ml - 3, py), QPointF(float(ml), py))
+            painter.drawText(
+                QRectF(0, py - 6, ml - 4, 12),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                f"{yv:.1f}",
+            )
+
+        # x-axis label
+        painter.setFont(QFont("Segoe UI", 7))
+        painter.drawText(
+            QRectF(ml, h - 12, pw, 12), Qt.AlignmentFlag.AlignCenter, "x (column)"
+        )
+        painter.end()
+
+
 class MetricsPanel(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.labels: dict[str, QLabel] = {}
         self._neighborhood_cells: dict[tuple[int, int], QLabel] = {}
 
-        layout = QFormLayout(self)
+        # Outer layout: form on top, flow chart on bottom
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+
+        form_widget = QWidget()
+        layout = QFormLayout(form_widget)
         for key in [
             "total_cost",
             "delta_j",
@@ -1065,9 +1157,32 @@ class MetricsPanel(QWidget):
         layout.addRow(local_label)
         layout.addRow(neighborhood)
 
+        outer.addWidget(form_widget)
+
+        flow_label = QLabel("Flow profile")
+        flow_label.setStyleSheet("font-weight: 600; margin-top: 6px;")
+        outer.addWidget(flow_label)
+
+        self.flow_profile = FlowProfileWidget()
+        outer.addWidget(self.flow_profile)
+
     def update_metrics(self, metrics: dict[str, Any]) -> None:
         for key, label in self.labels.items():
             label.setText(str(metrics.get(key, "-")))
+
+    def update_flow_profile(
+        self,
+        flow_fn: Callable[[int, int], tuple[float, float]] | None,
+        nx: int,
+        start_i: int,
+        goal_i: int,
+    ) -> None:
+        """Recompute the flow magnitude profile and refresh the chart."""
+        if flow_fn is None or nx <= 0:
+            self.flow_profile.set_data([], 0, 0)
+            return
+        data = [(float(i), math.hypot(*flow_fn(i, 0))) for i in range(nx)]
+        self.flow_profile.set_data(data, start_i, goal_i)
 
     def update_neighborhood(
         self,
@@ -1177,7 +1292,7 @@ class RiverCrossingMainWindow(QMainWindow):
         self.tabs.addTab(self.run_canvas, "Run")
         self.tabs.addTab(self.single_canvas, "Best path")
         self.tabs.addTab(self.compare_view, "Compare")
-        self.tabs.currentChanged.connect(lambda _: self._render_current_tab())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         central = QWidget()
         central_layout = QHBoxLayout(central)
@@ -1209,7 +1324,7 @@ class RiverCrossingMainWindow(QMainWindow):
         self.control_panel.inertia_spin.valueChanged.connect(self._on_selection_changed)
         self.control_panel.ql_episodes_combo.currentIndexChanged.connect(self._on_selection_changed)
         self.control_panel.flow_dir_down.toggled.connect(self._on_selection_changed)
-        self.control_panel.flow_strength_slider.valueChanged.connect(self._on_selection_changed)
+        self.control_panel.flow_strength_combo.currentIndexChanged.connect(self._on_selection_changed)
         self.control_panel.flow_sigma_spin.valueChanged.connect(self._on_selection_changed)
         self.control_panel.flow_floor_spin.valueChanged.connect(self._on_selection_changed)
         self.control_panel.flow_impact_spin.valueChanged.connect(self._on_selection_changed)
@@ -1393,7 +1508,7 @@ class RiverCrossingMainWindow(QMainWindow):
                 runs_list[0] if runs_list else None,
             )
             if display_run is not None:
-                self._set_single_run(display_run)
+                self._set_single_run(display_run, switch_to_run_tab=False)
             source = " (cached)" if payload.get("cached") else ""
             self._append_log(
                 f"Single experiment{source}: {len(runs_list)} seed(s), rendering seed={selected_seed}."
@@ -1404,8 +1519,8 @@ class RiverCrossingMainWindow(QMainWindow):
 
         if mode == "run_batch_experiment":
             last_records = [dict(item) for item in payload.get("records", [])]
-            for run in last_records:
-                self._upsert_record(run)
+            # Do NOT upsert batch records into the in-memory cache.
+            # Results are always on disk; _on_selection_changed will load them on demand.
             source = "loaded from cache" if payload.get("cached") else "saved"
             self._append_log(
                 f"Sweep complete — last experiment {source}: "
@@ -1515,6 +1630,8 @@ class RiverCrossingMainWindow(QMainWindow):
         if raw_path.exists():
             if str(raw_path) != str(self._results_path):
                 self._load_records_if_available(raw_path)
+            # Supplement with dijkstra records so delta_j can be computed.
+            self._try_supplement_dijkstra_records(selection, seeds, effective_algo_cfg)
             run = find_single_run(self._records, selection)
             if run is not None:
                 self._set_single_run(run, switch_to_run_tab=False)
@@ -1524,7 +1641,9 @@ class RiverCrossingMainWindow(QMainWindow):
                 )
             return
 
-        # No specific file — fall back to in-memory records (e.g. from a batch load)
+        # No specific file — fall back to in-memory records (e.g. from a batch load).
+        # Still try to supplement with dijkstra for delta_j.
+        self._try_supplement_dijkstra_records(selection, seeds, effective_algo_cfg)
         run = find_single_run(self._records, selection)
         if run is not None:
             self._set_single_run(run, switch_to_run_tab=False)
@@ -1534,12 +1653,83 @@ class RiverCrossingMainWindow(QMainWindow):
                 "Use 'Run Single Experiment' to generate results."
             )
 
-    def _set_compare_runs(self, runs: list[dict[str, Any]]) -> None:
+    def _try_supplement_dijkstra_records(
+        self,
+        selection: UISelectionState,
+        seeds: list[int],
+        effective_algo_cfg: dict,
+    ) -> None:
+        """Load the dijkstra results file for the same settings and merge into records.
+
+        This ensures that ``compute_delta_j`` can find the reference cost even
+        when a non-dijkstra run is loaded from a separate experiment file.
+        Silently skips if no dijkstra file exists or loading fails.
+        """
+        if selection.algorithm == "dijkstra":
+            return  # records already contain the dijkstra run itself
+
+        flow_cfg = SimulationWorker._build_flow_config_override(selection)
+        dijk_exp_id = build_experiment_id(
+            flow_cfg=flow_cfg,
+            algo_cfg=effective_algo_cfg,
+            seeds=seeds,
+            algorithm="dijkstra",
+        )
+        dijk_path, _ = results_paths(dijk_exp_id, self._analysis_dir)
+        if not dijk_path.exists():
+            return
+        try:
+            dijk_records = load_experiment_results(dijk_path)
+            for rec in dijk_records:
+                self._upsert_record(rec)
+        except Exception:  # noqa: BLE001
+            pass  # silently skip; delta_j will show "-" if unavailable
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == 2 and self._worker_thread is None:
+            self._load_compare_runs_for_tab()
+        self._render_current_tab()
+
+    def _load_compare_runs_for_tab(self) -> None:
+        """Auto-load result files for every algorithm with the current settings."""
+        selection = self.control_panel.selection_state()
+        seeds = [int(s) for s in self._exp_cfg.get("seeds", [selection.seed])]
+        effective_algo_cfg = dict(self._algo_cfg)
+        effective_algo_cfg["common"] = dict(effective_algo_cfg.get("common", {}))
+        effective_algo_cfg["common"]["beta"] = selection.impact
+        effective_algo_cfg["common"]["inertia"] = selection.inertia
+        flow_cfg = SimulationWorker._build_flow_config_override(selection)
+
+        algorithms = [str(a) for a in self._exp_cfg.get("algorithms", [])]
+        for algo in algorithms:
+            algo_exp_id = build_experiment_id(
+                flow_cfg=flow_cfg,
+                algo_cfg=effective_algo_cfg,
+                seeds=seeds,
+                algorithm=algo,
+                ql_episodes=selection.ql_episodes,
+            )
+            algo_path, _ = results_paths(algo_exp_id, self._analysis_dir)
+            if algo_path.exists():
+                try:
+                    for rec in load_experiment_results(algo_path):
+                        self._upsert_record(rec)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        runs = find_comparison_runs(self._records, selection)
+        if runs:
+            self._set_compare_runs(runs, switch_tab=False)
+        else:
+            self._append_log("No comparison runs found for current settings.")
+
+    def _set_compare_runs(self, runs: list[dict[str, Any]], switch_tab: bool = True) -> None:
         self._pause_animation(log_message=False)
         self._compare_runs = build_render_run_data(runs)
         self.compare_view.set_runs(self._compare_runs)
         self._compare_frame = max_frame_count(self._compare_runs)
-        self.tabs.setCurrentIndex(2)
+        if switch_tab:
+            self.tabs.setCurrentIndex(2)
         self._render_compare_frame()
 
     def _render_current_tab(self) -> None:
@@ -1549,6 +1739,15 @@ class RiverCrossingMainWindow(QMainWindow):
             self._render_single_frame()
         else:
             self._render_compare_frame()
+        self._update_flow_profile()
+
+    def _update_flow_profile(self) -> None:
+        """Refresh the flow distribution chart from the current environment settings."""
+        env = self._current_environment()
+        flow_fn = self._env_flow_fn(env)
+        self.metrics_panel.update_flow_profile(
+            flow_fn, env.grid.nx, env.start.i, env.goal.i
+        )
 
     def _handle_redraw_request(self) -> None:
         if self._animation_timer.isActive():

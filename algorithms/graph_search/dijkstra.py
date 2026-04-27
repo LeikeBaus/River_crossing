@@ -46,6 +46,7 @@ class PlanResult:
 def dijkstra(
     env: RiverEnvironment,
     cost_fn: CostFunction,
+    max_snapshots: int = 500,
 ) -> PlanResult:
     """Find the cost-optimal path using Dijkstra's algorithm.
 
@@ -65,6 +66,10 @@ def dijkstra(
         The fully-specified river-crossing environment.
     cost_fn:
         Transition-cost function ``c(s, a)``.
+    max_snapshots:
+        Maximum number of exploration-path snapshots to store.  Snapshots are
+        sampled evenly so memory and reconstruction time stay bounded even with
+        large inertia state spaces.
 
     Returns
     -------
@@ -90,6 +95,9 @@ def dijkstra(
 
     nodes_expanded = 0
     exploration_path: list[list[State]] = []
+    # Sample snapshots at most every `_snap_stride` expansions so the total
+    # stored count stays at most max_snapshots regardless of state-space size.
+    _snap_stride = max(1, inertia ** 2) if inertia > 1 else 1
 
     goal = env.goal
 
@@ -103,15 +111,17 @@ def dijkstra(
 
         nodes_expanded += 1
 
-        # Reconstruct partial path from start to this expansion frontier.
-        snapshot: list[State] = []
-        cur_node = node
-        while cur_node in prev:
-            snapshot.append(cur_node[0])
-            cur_node, _ = prev[cur_node]
-        snapshot.append(start)
-        snapshot.reverse()
-        exploration_path.append(snapshot)
+        # Reconstruct partial path and store as a snapshot, sampled so the
+        # total count stays bounded at max_snapshots.
+        if nodes_expanded % _snap_stride == 0 and len(exploration_path) < max_snapshots:
+            snapshot: list[State] = []
+            cur_node = node
+            while cur_node in prev:
+                snapshot.append(cur_node[0])
+                cur_node, _ = prev[cur_node]
+            snapshot.append(start)
+            snapshot.reverse()
+            exploration_path.append(snapshot)
 
         for action in env.valid_actions(state):
             next_state = env.transition(state, action)
