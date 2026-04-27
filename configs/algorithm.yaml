@@ -1,0 +1,44 @@
+common:
+  alpha: 1.0 # weight for time cost
+  beta: 1.0 # weight for energy cost
+  inertia: 2 # heading-history depth (0 = disabled, ≤5 recommended)
+  turn_penalty: 1.0 # multiplier for the turn cost term
+  version: 0.100 # version number for experiment tracking and reproducibility
+
+dijkstra:
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
+
+a_star:
+  heuristic: euclidean # heuristic function for A* algorithm
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
+
+weighted_a_star:
+  heuristic: euclidean # heuristic function for weighted A* algorithm
+  weight: 1.5 # weight for the heuristic function
+  max_snapshots: 500 # max exploration snapshots stored for UI animation
+
+dynamic_programming:
+  gamma: 1.0 # discount factor for dynamic programming
+  tolerance: 1.0e-6 # convergence tolerance
+  max_iterations: 10000 # maximum number of iterations
+
+apf:
+  k_att: 1.0 # attractive force gain
+  lambda_flow: 0.2 # flow field influence
+  k_dock: 0.3 # docking alignment penalty weight (0 = disabled)
+
+q_learning:
+  episodes: 1200 # number of training episodes
+  learning_rate: 0.1 # learning rate for Q-learning
+  gamma: 0.99 # discount factor for Q-learning
+  epsilon_start: 1.0 # initial exploration rate
+  epsilon_end: 0.02 # final exploration rate
+  epsilon_decay: 0.998 # decay rate for exploration
+  goal_reward: 50.0 # reward for a successful docking
+  progress_reward_scale: 2.5 # bonus for moving toward the docking corridor
+  revisit_penalty: 0.3 # penalty for revisiting states
+  approach_bonus: 5.0 # bonus for reaching a valid pre-docking state
+  max_steps_per_episode: 6400 # max steps per episode (default: 4 * nx * ny = 3200)
+  min_success_rate_for_decay: 0.05 # hold epsilon until 5 % of recent episodes succeed
+  success_window: 100 # number of recent episodes used to compute success rate
+  max_snapshots: 200 # max exploration snapshots stored for UI animation

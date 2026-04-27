@@ -1,0 +1,36 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && source \\.venv/bin/activate && python -c \"\nfrom core\\.dynamics\\.flow import make_flow\nfrom core\\.environment\\.grid import State\n\n# 10-column grid; centre at i=4\\.5\nf = make_flow\\(\\{'type': 'gaussian', 'vector': \\[0\\.0, 1\\.0\\], 'sigma': 2\\.0, 'floor': 0\\.1\\}, nx=10\\)\n\n# Middle column \\(i=4 and i=5\\) should be ~max\nfor i in \\[0, 2, 4, 5, 7, 9\\]:\n    vi, vj = f\\.at\\(State\\(i=i, j=3\\)\\)\n    print\\(f'  i=\\{i\\}, j=3 -> vj=\\{vj:\\.3f\\}'\\)\n\"\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && source \\.venv/bin/activate && python -c \"\nfrom experiments\\.experiment_id import build_experiment_id, results_paths\n\nflow_cfg = \\{'type': 'gaussian', 'vector': \\[0\\.0, 1\\.0\\], 'sigma': 5\\.0, 'floor': 0\\.1\\}\nalgo_cfg = \\{'common': \\{'alpha': 1\\.0, 'beta': 1\\.0, 'inertia': 2, 'turn_penalty': 1\\.0, 'version': 0\\.1\\}\\}\n\n# batch\neid = build_experiment_id\\(flow_cfg, algo_cfg, seeds=\\[1,2,3,4,5\\]\\)\nprint\\('batch :', eid\\)\nraw, ev = results_paths\\(eid\\)\nprint\\('raw   :', raw\\)\nprint\\('ev    :', ev\\)\n\n# single\neid2 = build_experiment_id\\(flow_cfg, algo_cfg, seeds=\\[3\\], algorithm='dijkstra'\\)\nprint\\('single:', eid2\\)\n\"\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && source \\.venv/bin/activate && python -c \"\nfrom experiments\\.sweep import load_sweep_config, count_sweep_points, sweep_points\n\ncfg = load_sweep_config\\('configs/sweep\\.yaml'\\)\ntotal = count_sweep_points\\(cfg\\)\nprint\\(f'Total sweep points: \\{total\\}'\\)\n\n# Spot-check first and last point\npts = list\\(sweep_points\\(cfg\\)\\)\np0, pN = pts\\[0\\], pts\\[-1\\]\nprint\\(f'First: type=\\{p0\\.flow_type\\} dir=\\{p0\\.flow_dir\\} str=\\{p0\\.flow_strength\\} sigma=\\{p0\\.sigma\\} inertia=\\{p0\\.inertia\\}'\\)\nprint\\(f'Last:  type=\\{pN\\.flow_type\\} dir=\\{pN\\.flow_dir\\} str=\\{pN\\.flow_strength\\} sigma=\\{pN\\.sigma\\} inertia=\\{pN\\.inertia\\}'\\)\nprint\\(\\)\n# verify combos: gaussian: 2 dirs \\* 11 str \\* 10 sigmas \\* 5 inertias = 1100\n# constant:      2 dirs \\* 11 str \\*  1 sigma \\* 5 inertias = 110\n# total = 1210\nprint\\('Expected: 1210  Got:', total, '->',  'OK' if total == 1210 else 'MISMATCH'\\)\n\"\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && python -m unittest test_sweep -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && head -5 requirements\\.txt && ls test/__init__\\.py 2>/dev/null \\|\\| echo \"no __init__\\.py\" && cat main\\.py \\| grep -i test 2>/dev/null \\| head -5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && python -m unittest discover -s test -p \"test_sweep\\.py\" -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /home/nils/Downloads/Programmierung/River_crossing && python -c \"\nfrom experiments\\.sweep import load_sweep_config, count_sweep_points\ncfg = load_sweep_config\\('configs/sweep\\.yaml'\\)\nprint\\('Sweep points:', count_sweep_points\\(cfg\\)\\)\n\" && python -m unittest discover -s test -p \"test_sweep\\.py\" -v 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd /c/Programmierung/River_crossing && source \\.venv/Scripts/activate && python -c \"\nfrom pathlib import Path\nfrom experiments\\.sweep import load_sweep_config, sweep_points, run_sweep\nfrom core\\.config_loader import load_algorithm_config\n\nconfig_dir = Path\\('configs'\\)\nanalysis_dir = Path\\('analysis'\\)\nsweep_cfg = load_sweep_config\\(config_dir / 'sweep\\.yaml'\\)\nalgo_cfg = load_algorithm_config\\(config_dir / 'algorithm\\.yaml'\\)\n\ngen = run_sweep\\(sweep_cfg=sweep_cfg, base_algo_cfg=algo_cfg, config_dir=config_dir, analysis_dir=analysis_dir\\)\ncount = 0\ntry:\n    while True:\n        p = next\\(gen\\)\n        count \\+= 1\n        print\\(f'\\[\\{count\\}\\] \\{\\\\\"cached\\\\\" if p\\[\\\\\"cached\\\\\"\\] else \\\\\"ran\\\\\"\\}: \\{p\\[\\\\\"exp_id\\\\\"\\]\\}'\\)\n        if count >= 12:\n            break\nexcept StopIteration as e:\n    print\\('Done'\\)\nexcept Exception as e:\n    import traceback\n    traceback\\.print_exc\\(\\)\n\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

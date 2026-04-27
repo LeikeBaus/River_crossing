@@ -6,7 +6,9 @@ Ziel dieses Projekts ist die Untersuchung und der Vergleich verschiedener Pfadpl
 
 Das Szenario orientiert sich an der realen Fährverbindung zwischen zwei leicht versetzten Anlegestellen. Das Schiff startet an einem Punkt A und muss einen Zielpunkt B am gegenüberliegenden Ufer erreichen. Aufgrund der Lage der Anlegestellen ist eine direkte frontale Anfahrt nicht möglich. Stattdessen muss das Ziel in einem Winkelbereich von 30° bis 60° relativ zur Uferlinie angefahren werden.
 
-Optimiert wird ausschließlich die Überquerungszeit.
+In der aktuell implementierten Diskretisierung wird diese Bedingung als **diagonale Anfahrt** modelliert: Das Ziel ist nur dann gültig erreicht, wenn der letzte Schritt diagonal erfolgt. Dieselbe Einschränkung gilt symmetrisch auch für die Abfahrt vom Start, die ebenfalls nur diagonal erfolgen darf.
+
+Optimiert wird eine gewichtete Kostenfunktion aus Überquerungszeit und strömungsabhängigem Energieaufwand. In der Standardkonfiguration dominiert die Zeitkomponente; in der UI kann der Einfluss der Strömungskosten zusätzlich über den Parameter **Impact** verändert werden.
 
 ## 2. Mathematische Problemformulierung
 
@@ -25,6 +27,14 @@ u_flow : S → ℝ²
 Im einfachsten Fall ist die Strömung konstant:
 
 u_flow(s) = u₀ für alle s ∈ S
+
+Alternativ steht ein Gauß'sches Strömungsmodell zur Verfügung, bei dem die Strömungsstärke horizontale Abhängigkeit von der Spalte (i) hat:
+
+m(i) = floor + (1 − floor) · exp(−0.5 · ((i − i_c) / σ)²)
+
+u_flow(s) = m(s.i) · u₀
+
+Somit teilen alle Zellen derselben Spalte dieselbe Strömungsstärke; die schnellste Zone verläuft als vertikaler Streifen durch die Mitte.
 
 ### 2.2 Aktionsraum
 
@@ -61,9 +71,14 @@ Allgemeine Form:
 
 c(s, a) = α · t(s, a) + β · E(s, a)
 
+Bei aktiviertem Trägheitsspeicher (inertia > 0) kommt ein Drehkostenterm hinzu:
+
+c(s, a, hist) = α · t(s, a) + β · E(s, a) + K_turn · (1 − cos θ) / 2
+
 mit
 
-α, β ∈ ℝ_{≥0}
+α, β, K_turn ∈ ℝ_{≥0}
+θ = Winkel zwischen gemitteltem Heading (hist) und aktueller Aktion
 
 t(s, a) = Zeitkosten
 E(s, a) = Energieverbrauch
@@ -82,21 +97,15 @@ Gesucht ist ein optimaler Pfad
 
 π* = argmin_π J(π)
 
-### 2.5 Randbedindung: Anfahrtwinkel
+### 2.5 Randbedingung: Diagonale Start- und Zielbewegung
 
-Das Ziel darf nur erreicht werden, wenn der letzte Bewegungsvektor a_T einen Winkel θ im Bereich
+Das Ziel darf nur erreicht werden, wenn der letzte Bewegungsvektor diagonal ist. Zulässig sind also nur die vier diagonalen Aktionen
 
-30° ≤ θ ≤ 60°
+{ (1,1), (1,-1), (-1,-1), (-1,1) }.
 
-relativ zur Uferlinie bzw. Zielorientierung erfüllt.
+Analog dazu darf auch der erste Schritt vom Start nur diagonal erfolgen.
 
-Formal:
-
-θ = arccos( ⟨a_T, n⟩ / (||a_T|| · ||n||) )
-
-mit n als Normalenvektor der Anlegestelle.
-
-Zustände, die diese Bedingung nicht erfüllen, gelten nicht als gültige Zielzustände.
+Zusätzlich ist die befahrbare Wasserfläche als Korridor zwischen Start- und Zielspalte modelliert. Zustände links vom Start oder rechts vom Ziel gelten als Land und dürfen nicht betreten werden.
 
 ## 3. Zielsetzung
 
@@ -171,27 +180,27 @@ mit Diskontfaktor γ ∈ (0,1].
 
 ### 4.5 Artificial Potential Field (APF)
 
-Definition eines Potentials über dem Zustandsraum:
+Das APF verwendet weiterhin ein Potential der Form
 
-Φ(s) = Φ_att(s) + Φ_flow(s)
+Φ(s) = Φ_att(s) + Φ_flow(s),
+
+wird jedoch in der aktuellen Implementierung zusätzlich **andockungsbewusst** geführt. Statt das Schiff nur direkt auf das Ziel auszurichten, wird auch ein gültiger Vorbereich des Ziels berücksichtigt, aus dem der letzte Schritt die Winkelbedingung erfüllen kann.
 
 Attraktives Potential:
 
-Φ_att(s) = 1/2 · k_att · || s − s_goal ||²
+Φ_att(s) = 1/2 · k_att · || s − s_target ||²
+
+wobei s_target je nach Situation entweder das eigentliche Ziel oder ein gültiger Vorzustand des Ziels ist.
 
 Strömungseinfluss:
 
 Φ_flow(s) = −λ · ⟨ s, u_flow(s) ⟩
 
-Die Bewegung erfolgt entlang des negativen Gradienten:
-
-a*(s) ≈ argmin_{a ∈ A} ⟨ a, ∇Φ(s) ⟩
-
-Die diskrete Aktion wird als beste Approximation des kontinuierlichen Gradienten gewählt.
+Die diskrete Aktion wird entlang des negativen Gradienten gewählt und um eine Zusatzbewertung ergänzt, die Zustände außerhalb des gültigen Anfahrkorridors benachteiligt. Dadurch vermeidet der APF das frühere Verhalten, direkt geradeaus zum Ziel zu fahren und dort an der Winkelrestriktion zu scheitern.
 
 ### 4.6 Reinforcement Learning – Q-Learning
 
-Q-Learning approximiert die optimale Aktionswertfunktion Q*.
+Q-Learning approximiert die optimale Aktionswertfunktion Q* weiterhin tabellarisch, verwendet inzwischen aber eine **Reward-Shaping-Strategie**, damit sich eine stabile Andockpolitik schneller ausbildet. Bei aktiviertem Trägheitsspeicher (inertia > 0) werden Q-Tabellen-Einträge mit Schlüsseln `(s, history_tuple)` gespeichert.
 
 Update-Regel:
 
@@ -205,9 +214,13 @@ mit
 γ ∈ (0,1] (Diskontfaktor),
 r = R(s, a).
 
-Die optimale Politik ergibt sich aus:
+Der Reward enthält dabei heute nicht nur die negativen Bewegungskosten, sondern auch:
+- einen positiven Zielreward für erfolgreiches Andocken,
+- einen Fortschrittsbonus in Richtung Ziel bzw. Andockkorridor,
+- eine Strafe für Wiederbesuche bereits gesehener Zustände,
+- einen Bonus für das Erreichen eines gültigen Vor-Andockzustands.
 
-π*(s) = argmax_{a ∈ A} Q*(s, a)
+Dadurch werden Schleifen und zufälliges Pendeln reduziert und die gelernten Policies deutlich robuster.
 
 ## 5. Vergleichskriterien
 
@@ -249,6 +262,7 @@ river-crossing/
 │
 ├── configs/
 │   ├── env.yaml
+│   ├── env_constant.yaml
 │   ├── algorithm.yaml
 │   └── experiment.yaml
 │
@@ -268,9 +282,11 @@ river-crossing/
 ├── ui/
 │   └── visualization.py
 │
+├── test/
+│
 ├── analysis/
 ├── main.py
-└── README.py
+└── README.md
 
 ## 7. Konfigurationsprinzip
 
@@ -278,9 +294,11 @@ Alle variablen Parameter werden ausschließlich über Konfigurationsdateien defi
 
 Beispiele:
 - Gittergröße (N_x, N_y)
-- Strömungsmodell
-- Gewichtungsparameter α, β
-- RL-Parameter (α, γ, ε)
+- Strömungsmodell und Strömungsvektor (`constant` oder `gaussian`)
+- Gauß'sche Profilparameter (`sigma`, `floor`)
+- Gewichtungsparameter α, β sowie Trägheitsparameter (`inertia`, `turn_penalty`)
+- APF-Parameter (`k_att`, `lambda_flow`)
+- RL-Parameter (α, γ, ε sowie Reward-Shaping)
 - Anzahl Episoden
 - Random Seeds
 
@@ -292,35 +310,52 @@ Ziele:
 
 ## 8. Visualisierung (UI)
 
-Die UI visualisiert:
-- Gitterstruktur,
-- Strömungsvektoren,
-- Start- und Zielpunkt,
-- gefundene Trajektorien,
-- Vergleich mehrerer Algorithmen.
+Die aktuelle PyQt6-Oberfläche bietet drei klar getrennte Ansichten:
+- **Run**: zeigt den schrittweisen Aufbau einer Lösung,
+- **Best path**: zeigt und animiert den final besten Pfad eines ausgewählten Laufs,
+- **Compare**: vergleicht die besten Pfade mehrerer Algorithmen im selben Szenario.
 
-Optional:
-- animierte Bewegung,
-- Filter nach Algorithmus, Run, Seed.
+Zusätzlich umfasst die UI:
+- Gitterstruktur,
+- Strömungsvektoren mit Pfeildarstellung,
+- Start- und Zielpunkt,
+- Animation mit Play, Pause, Step forward, Step reverse und Reset,
+- Flow-Steuerung über Radiobuttons für die Richtung (↓ Top → Bottom / ↑ Bottom → Top),
+- einen Slider für die Strömungsstärke,
+- Gauß-Profilregler (Sigma, Floor) bei Auswahl des Gauß'schen Strömungstyps,
+- eine zusätzliche **Impact**-Steuerung in Prozent, die intern auf den Gewichtungsparameter β der Kostenfunktion abgebildet wird,
+- ein **Inertia**-Spinbox (0–5) zur Steuerung des Heading-Speichers,- ein **QL episodes**-Auswahlmenü (200 / 500 / 1500) zur Festlegung der Trainingstiefe des Q-Learning,- ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
+
+Im Run-Tab werden Entscheidungsoptionen farblich hervorgehoben:
+- rot = ungültige Aktion,
+- gelb = gültige, aber nicht gewählte Aktion,
+- grün = aktuell beste Aktion gemäß Planung.
+
+Die Aktionen **Run Single Experiment**, **Run Experiment Batch**, **Show Results** und **Compare** sind in der aktuellen UI ausschließlich über die obere Toolbar verfügbar.
 
 ## 9. Ergebnisartekfakt
 Das Ergebnisartefakt dieses Projekts besteht aus einem konsistenten und reproduzierbaren Satz an Experimenten sowie deren Auswertung. Es dient dazu, die implementierten Algorithmen unter identischen Bedingungen vergleichbar zu machen und ihre Eigenschaften systematisch zu analysieren. Dabei stehen sowohl die Qualität der gefundenen Lösungen als auch der Rechenaufwand und – im Fall von Reinforcement Learning – das Lernverhalten im Fokus.
 
 ### 9.1 Experimentelle Datensätze
 
-Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des zulässigen Anfahrwinkels.
+Für jede Kombination aus Environment, Algorithmus und Parametrierung wird ein eigenständiger Experimentlauf durchgeführt. Die zugrunde liegenden Konfigurationen umfassen insbesondere die Gittergröße, die Strömung, die Lage von Start- und Zielpunkt sowie die Definition des befahrbaren Korridors und der diagonalen Start-/Zielbedingung.
 
-Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der die resultierende Trajektorie des Schiffes beschreibt. Diese Trajektorie ist eine Folge diskreter Zustände
+Ein einzelner Lauf erzeugt einen vollständigen Datensatz, der heute sowohl den **besten resultierenden Pfad** als auch den **Run-Trace** für die Visualisierung enthält. Dazu gehören insbesondere:
+- `path` und `actions` als kompatible Standardfelder,
+- `best_path` und `best_actions` für die explizite Best-Path-Darstellung,
+- `run_trace` für die schrittweise UI-Visualisierung,
+- Zeit- und Trainingsmetriken,
+- Reward-Verlauf und Erfolgsrate beim Q-Learning.
+
+Die Trajektorie ist eine Folge diskreter Zustände
 π = (s₀, s₁, …, s_T)
 und wird zusammen mit den zugehörigen Aktionen gespeichert. Aus ihr wird die Gesamtzeit berechnet:
 
 J(π) = Σ t(s_t, a_t)
 
-Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der Anfahrbedingung überprüfen zu können.
+Zusätzlich werden die Anzahl der benötigten Schritte sowie der letzte Bewegungsvektor erfasst, um die Einhaltung der diagonalen Zielbedingung überprüfen zu können.
 
-Neben diesen pfadbezogenen Größen wird auch der Rechenaufwand protokolliert. Bei den graphbasierten Verfahren und beim Potentialfeld entspricht dies der Planungszeit bis zur Lösung. Beim Q-Learning werden sowohl die Trainingsdauer als auch die Ausführungszeit der gelernten Policy erfasst. Darüber hinaus werden für das Reinforcement Learning der Reward-Verlauf über die Episoden hinweg sowie die resultierende Politik gespeichert, um Aussagen über das Konvergenzverhalten treffen zu können.
-
-Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet werden können.
+Alle Daten werden in strukturierter Form abgelegt, sodass sie später automatisiert ausgewertet und in der UI getrennt als **Run**, **Best path** und **Compare** genutzt werden können.
 
 ### 9.2 Analyse und Vergleich
 
@@ -334,13 +369,13 @@ Ergänzend dazu wird die benötigte Rechenzeit betrachtet, sowohl in absoluten W
 
 Für das Q-Learning wird zusätzlich das Lernverhalten analysiert. Hierbei steht im Vordergrund, wie schnell sich eine stabile Strategie entwickelt und wie stark die Ergebnisse zwischen verschiedenen Durchläufen variieren. Der Verlauf der kumulierten Rewards pro Episode dient dabei als zentrales Diagnoseinstrument.
 
-Ein weiterer Aspekt der Analyse ist die Sensitivität gegenüber der Strömung. Durch Variation von Richtung und Stärke des Strömungsvektors wird untersucht, wie sich die resultierenden Pfade verändern und wie robust die einzelnen Verfahren auf diese Änderungen reagieren. Ebenso wird betrachtet, welchen Einfluss die Einschränkung des Anfahrwinkels auf die Lösungsstruktur und die Planungszeit hat.
+Ein weiterer Aspekt der Analyse ist die Sensitivität gegenüber der Strömung. Durch Variation von Richtung und Stärke des Strömungsvektors wird untersucht, wie sich die resultierenden Pfade verändern und wie robust die einzelnen Verfahren auf diese Änderungen reagieren. Ebenso wird betrachtet, welchen Einfluss die diagonale Start-/Zielbedingung und der Land-Wasser-Korridor auf Lösungsstruktur und Planungszeit haben.
 
 ### 9.3 Visuelle Aufbereitung
 
-Ein wesentlicher Bestandteil des Ergebnisartefakts ist die visuelle Darstellung der Ergebnisse. Für ausgewählte Szenarien werden die berechneten Trajektorien direkt im Gitter visualisiert. Dabei werden sowohl die Strömungsvektoren als auch der zulässige Anfahrkorridor am Zielpunkt dargestellt.
+Ein wesentlicher Bestandteil des Ergebnisartefakts ist die visuelle Darstellung der Ergebnisse. Für ausgewählte Szenarien werden die berechneten Trajektorien direkt im Gitter visualisiert. Dabei werden sowohl die Strömungsvektoren als auch der befahrbare Wasserkorridor zwischen Start und Ziel dargestellt.
 
-Diese Visualisierung ermöglicht es, Unterschiede zwischen den Algorithmen unmittelbar nachzuvollziehen. Insbesondere lassen sich typische Verhaltensweisen erkennen, etwa Umwege zur Einhaltung des Anfahrwinkels oder lokale Fehlentscheidungen beim Potentialfeldansatz.
+Diese Visualisierung ermöglicht es, Unterschiede zwischen den Algorithmen unmittelbar nachzuvollziehen. Insbesondere lassen sich typische Verhaltensweisen erkennen, etwa Umwege zur Einhaltung der diagonalen Endbedingung oder lokale Fehlentscheidungen beim Potentialfeldansatz.
 
 Ergänzend dazu kann die Bewegung des Schiffes entlang der Trajektorie animiert werden, um den zeitlichen Verlauf der Entscheidungsschritte sichtbar zu machen.
 
@@ -353,3 +388,40 @@ Dadurch lassen sich sämtliche Ergebnisse reproduzieren und gezielt variieren. G
 ### 9.5 Zusammenfassung
 
 Das Ergebnisartefakt stellt einen strukturierten und nachvollziehbaren Vergleich verschiedener Pfadplanungsverfahren in einer strömungsbehafteten Umgebung dar. Es verbindet experimentelle Daten, quantitative Auswertung und visuelle Analyse zu einem konsistenten Gesamtbild und ermöglicht damit eine fundierte Bewertung der eingesetzten Methoden.
+
+## 10. Kommandos
+### 10.1 Run Full Experiment Batch and Save Raw Results
+```bash
+python -c "from experiments.runner import run_all_experiments; run_all_experiments(config_dir='configs', output_path='analysis/raw_results.json')"
+```
+
+### 10.2 Evaluate Raw Results and Save Summary
+```bash
+python -c "from experiments.evaluator import evaluate_results; evaluate_results('analysis/raw_results.json', output_path='analysis/evaluation_summary.json', reference_algorithm='dijkstra')"
+```
+
+### 10.3 Optional: Run Fewer RL Episodes for Faster Batch Turnaround
+
+```bash
+python -c "from experiments.runner import run_all_experiments; run_all_experiments(config_dir='configs', output_path='analysis/raw_results_fast.json', rl_episodes=50)"
+```
+
+### 10.4 Run Full Parameter Sweep via UI
+Use the **Run Experiment Batch** toolbar action. The sweep iterates all combinations defined in `configs/sweep.yaml` (currently 3 630 points: flow types × directions × strengths × sigma × floor × alpha × beta × inertia × QL episodes × seeds). Results are cached: points whose output files already exist in `analysis/` are skipped.
+
+### 10.5 Count Sweep Points
+```bash
+python -c "from experiments.sweep import load_sweep_config, count_sweep_points; print(count_sweep_points(load_sweep_config('configs/sweep.yaml')))"
+```
+
+### 10.6 Experiment ID Scheme
+Every result file is named with a structured ID:
+```
+[{algo}-]V{NNNN}-{flow_type}{dir}[v{NN}][-s{NNN}][-f{NN}][-a{NN}][-b{NN}]-i{N}[-t{NN}][-g{NX}x{NY}][-e{N}]-S{seeds}
+```
+The `e{N}` token encodes the Q-learning episode count (e.g. `e200`, `e500`, `e1500`); it is omitted when the default value of 1200 is used. Raw results use the prefix `R-`, evaluations use `EV-`.
+
+## 11. Tests
+```bash
+python -m test.test_file
+```

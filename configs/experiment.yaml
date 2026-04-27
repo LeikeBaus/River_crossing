@@ -1,0 +1,26 @@
+seeds: [1]
+
+environments:
+  - name: gaussian
+    env_config: configs/env.yaml
+  - name: constant
+    env_config: configs/env_constant.yaml
+
+algorithms:
+  - dijkstra
+  - a_star
+  - weighted_a_star
+  - dynamic_programming
+  - apf
+  - q_learning
+
+q_learning_episodes: 1200
+
+metrics:
+  - total_time
+  - path_length
+  - plan_time
+  - training_time
+  - inference_time
+  - angle_valid
+  - delta_j
