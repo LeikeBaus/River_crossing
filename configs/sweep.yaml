@@ -12,35 +12,35 @@ algorithms:
   - a_star
   - weighted_a_star
   - dynamic_programming
-  - apf
   - q_learning
 
-# Flow type: "gaussian" and/or "constant"
-flow_types:
-  - gaussian
-  - constant
+# Environment sizes — small (10×5), medium (40×20), large (80×40)
+env_sizes:
+  - small
+  - medium
+  - large
 
 # Flow direction: "up" (bottom→top, vj=+1) and/or "down" (top→bottom, vj=-1)
 flow_directions:
   - up
   - down
 
-# Flow strength (vector magnitude).  Range 0.0 – 1.0 in steps of 0.1.
-flow_strengths: [0.0, 0.5, 1.0]
+# Flow strength (vector magnitude).  Range 0.0 – 1.0 in steps of 0.5.
+flow_strengths: 1.0
 
 # Gaussian sigma values (grid cells).  Only used when flow_type == "gaussian".
 # Range 1.0 – 10.0 in steps of 1.0.
-sigmas: [5.0]
+sigmas: [5.0, 10.0]
 
 # Gaussian floor fraction — fixed at 10 %
-floor: 0.10
+floor: [0.10]
 
 # Cost-function weights — fixed
 alpha: 1.0
 beta: 1.0
 
 # Inertia values (heading-history depth)
-inertias: [0, 1, 2, 3]
+inertias: [0, 1]
 
 # Q-learning episodes — three options
 ql_episodes: [200, 500, 1500]
@@ -48,6 +48,4 @@ ql_episodes: [200, 500, 1500]
 # Turn penalty — fixed
 turn_penalty: 1.0
 
-# Grid dimensions — fixed at defaults (40 × 20)
-grid_nx: 40
-grid_ny: 20
+# Grid dimensions derived from env_sizes; not used directly in sweep loops.

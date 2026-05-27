@@ -50,6 +50,45 @@ from experiments.runner import (
 )
 from experiments.sweep import count_sweep_points, load_sweep_config, run_sweep
 
+# ---------------------------------------------------------------------------
+# Environment size lookups — derived from configs/env.yaml at import time.
+# ---------------------------------------------------------------------------
+
+_ENV_CONFIG_PATH = "configs/env.yaml"
+
+
+def _load_env_size_maps(
+    config_path: str,
+) -> tuple[
+    dict[str, tuple[int, int]],
+    dict[str, tuple[int, int]],
+    dict[str, tuple[int, int]],
+]:
+    """Return (grid, start, goal) dicts keyed by size name from env.yaml."""
+    import yaml  # local import to avoid circular issues at module load
+
+    try:
+        with open(config_path, encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        cfg = {}
+
+    sizes = cfg.get("sizes", {})
+    grid: dict[str, tuple[int, int]] = {}
+    start: dict[str, tuple[int, int]] = {}
+    goal: dict[str, tuple[int, int]] = {}
+    for name, variant in sizes.items():
+        g = variant.get("grid", {})
+        grid[name] = (int(g.get("nx", 40)), int(g.get("ny", 20)))
+        s = variant.get("start", [2, 5])
+        start[name] = (int(s[0]), int(s[1]))
+        go = variant.get("goal", [37, 15])
+        goal[name] = (int(go[0]), int(go[1]))
+    return grid, start, goal
+
+
+_ENV_SIZE_GRID, _ENV_SIZE_START, _ENV_SIZE_GOAL = _load_env_size_maps(_ENV_CONFIG_PATH)
+
 
 @dataclass(frozen=True)
 class UISelectionState:
@@ -63,7 +102,7 @@ class UISelectionState:
     flow_sigma: float = 5.0
     flow_floor: float = 0.1
     impact: float = 0.0
-    inertia: int = 2
+    inertia: int = 1
     ql_episodes: int = 500
 
 
@@ -303,12 +342,15 @@ class SimulationWorker(QObject):
                 seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
                 flow_cfg = self._build_flow_config_override(self.selection)
                 effective_algo = self._effective_algo_cfg(algo_cfg)
+                _nx, _ny = _ENV_SIZE_GRID.get(self.selection.environment, (80, 40))
                 exp_id = build_experiment_id(
                     flow_cfg=flow_cfg,
                     algo_cfg=effective_algo,
                     seeds=seeds,
                     algorithm=self.selection.algorithm,
                     ql_episodes=self.selection.ql_episodes,
+                    grid_nx=_nx,
+                    grid_ny=_ny,
                 )
                 raw_path, ev_path = results_paths(exp_id, self.analysis_dir)
 
@@ -415,12 +457,15 @@ class SimulationWorker(QObject):
                     seeds = [int(s) for s in exp_cfg.get("seeds", [self.selection.seed])]
                     flow_cfg = self._build_flow_config_override(self.selection)
                     effective_algo = self._effective_algo_cfg(algo_cfg)
+                    _nx2, _ny2 = _ENV_SIZE_GRID.get(self.selection.environment, (80, 40))
                     exp_id = build_experiment_id(
                         flow_cfg=flow_cfg,
                         algo_cfg=effective_algo,
                         seeds=seeds,
                         algorithm=self.selection.algorithm,
                         ql_episodes=self.selection.ql_episodes,
+                        grid_nx=_nx2,
+                        grid_ny=_ny2,
                     )
                     raw_path, _ = results_paths(exp_id, self.analysis_dir)
                     if raw_path.exists():
@@ -469,14 +514,12 @@ class SimulationWorker(QObject):
     def _build_flow_config_override(selection: UISelectionState) -> dict:
         """Build a flow configuration dict from the current UI selection state."""
         vi, vj = selection.flow_vector
-        cfg: dict = {
-            "type": selection.environment,
+        return {
+            "type": "gaussian",
             "vector": [vi, vj],
+            "sigma": selection.flow_sigma,
+            "floor": selection.flow_floor,
         }
-        if selection.environment == "gaussian":
-            cfg["sigma"] = selection.flow_sigma
-            cfg["floor"] = selection.flow_floor
-        return cfg
 
 
 class GridCanvas(QGraphicsView):
@@ -789,7 +832,8 @@ class ControlPanel(QWidget):
         self._updating_flow_controls = False
 
         self.environment_combo = QComboBox()
-        self.environment_combo.addItems(["gaussian", "constant"])
+        self.environment_combo.addItems(["small", "medium", "large"])
+        self.environment_combo.setCurrentText("large")
 
         self.algorithm_combo = QComboBox()
         self.algorithm_combo.addItems([
@@ -797,7 +841,6 @@ class ControlPanel(QWidget):
             "a_star",
             "weighted_a_star",
             "dynamic_programming",
-            "apf",
             "q_learning",
         ])
 
@@ -811,17 +854,17 @@ class ControlPanel(QWidget):
         self.show_labels.setChecked(True)
 
         self.speed = QDoubleSpinBox()
-        self.speed.setRange(0.1, 10.0)
-        self.speed.setSingleStep(0.1)
-        self.speed.setValue(1.0)
+        self.speed.setRange(2.0, 20.0)
+        self.speed.setSingleStep(2.0)
+        self.speed.setValue(10.0)
         self.speed.setSuffix("x")
 
         self.inertia_spin = QSpinBox()
-        self.inertia_spin.setRange(0, 3)
-        self.inertia_spin.setValue(2)
+        self.inertia_spin.setRange(0, 1)
+        self.inertia_spin.setValue(1)
         self.inertia_spin.setToolTip(
             "Number of past steps that form the reference heading for turn cost.\n"
-            "0 = no turn penalty, 1 = only last step, 4 = last 4 steps (more arc-like paths)."
+            "0 = no turn penalty, 1 = last step."
         )
 
         self.ql_episodes_combo = QComboBox()
@@ -852,8 +895,8 @@ class ControlPanel(QWidget):
         )
 
         self.flow_floor_spin = QDoubleSpinBox()
-        self.flow_floor_spin.setRange(1.0, 50.0)
-        self.flow_floor_spin.setSingleStep(1.0)
+        self.flow_floor_spin.setRange(10.0, 25.0)
+        self.flow_floor_spin.setSingleStep(15.0)
         self.flow_floor_spin.setValue(10.0)
         self.flow_floor_spin.setSuffix("%")
         self.flow_floor_spin.setToolTip(
@@ -938,11 +981,10 @@ class ControlPanel(QWidget):
         layout.addStretch(1)
 
         # Set initial gaussian params visibility based on default env selection.
-        self._on_environment_changed(self.environment_combo.currentText())
+        self._gaussian_params_widget.setVisible(True)
 
     def _on_environment_changed(self, env_name: str) -> None:
-        """Show/hide Gaussian-specific parameters based on the environment selection."""
-        self._gaussian_params_widget.setVisible(env_name == "gaussian")
+        """Emit redraw when environment size selection changes."""
         self.redraw_requested.emit()
 
     def set_flow_from_config(self, flow_cfg: dict) -> None:
@@ -1273,7 +1315,11 @@ class RiverCrossingMainWindow(QMainWindow):
         self._single_frame = 0
         self._compare_frame = 0
 
-        self._env_cfg = load_env_config("configs/env.yaml")
+        self._env_cfg = load_env_config(_ENV_CONFIG_PATH)
+        self._env_cfgs: dict[str, dict] = {
+            size: load_env_config(_ENV_CONFIG_PATH, size=size)
+            for size in ("small", "medium", "large")
+        }
         self._algo_cfg = load_algorithm_config("configs/algorithm.yaml")
         self._exp_cfg = load_experiment_config("configs/experiment.yaml")
 
@@ -1330,13 +1376,15 @@ class RiverCrossingMainWindow(QMainWindow):
         self.control_panel.flow_impact_spin.valueChanged.connect(self._on_selection_changed)
 
     def _apply_env_to_views(self) -> None:
-        nx = int(self._env_cfg["grid"]["nx"])
-        ny = int(self._env_cfg["grid"]["ny"])
+        size = self.control_panel.environment_combo.currentText()
+        base_cfg = self._env_cfgs.get(size, self._env_cfg)
+        nx = int(base_cfg["grid"]["nx"])
+        ny = int(base_cfg["grid"]["ny"])
         self.run_canvas.set_grid_shape(nx, ny)
         self.single_canvas.set_grid_shape(nx, ny)
         self.compare_view.set_grid_shape(nx, ny)
         self._populate_control_options()
-        flow_cfg = self._env_cfg.get("flow", {})
+        flow_cfg = base_cfg.get("flow", {})
         self.control_panel.set_flow_from_config(flow_cfg)
         self._render_current_tab()
 
@@ -1354,6 +1402,10 @@ class RiverCrossingMainWindow(QMainWindow):
 
         self.control_panel.environment_combo.clear()
         self.control_panel.environment_combo.addItems(environments)
+        # Default to "large" (the full-size grid) if available.
+        large_idx = self.control_panel.environment_combo.findText("large")
+        if large_idx >= 0:
+            self.control_panel.environment_combo.setCurrentIndex(large_idx)
         self.control_panel.algorithm_combo.clear()
         self.control_panel.algorithm_combo.addItems(algorithms)
         self.control_panel.seed_combo.clear()
@@ -1528,16 +1580,17 @@ class RiverCrossingMainWindow(QMainWindow):
             )
             self._append_log(f"Evaluation summary: {payload.get('summary_path')}")
 
-            # Select the last experiment in the UI (first seed of the last point)
+            # If the last sweep step was not cached, navigate to it; otherwise keep
+            # the current selection and let _on_selection_changed discover the file.
             if last_records:
                 last_run = last_records[0]
                 env_name = str(last_run.get("environment_name", ""))
                 algo_name = str(last_run.get("algorithm", ""))
                 seed_val = int(last_run.get("seed", 1))
                 self._select_run_in_controls(env_name, algo_name, seed_val)
-                self._set_single_run(last_run)
-            else:
-                self.metrics_panel.update_metrics({})
+            # Always refresh the display from disk for the current selection.
+            # This picks up newly-created files even when the last step was cached.
+            self._on_selection_changed("sweep_complete")
             return
 
         if mode == "show_results":
@@ -1611,19 +1664,27 @@ class RiverCrossingMainWindow(QMainWindow):
         if self.control_panel._updating_flow_controls:
             return
 
+        # Update grid shape when environment size changes.
         selection = self.control_panel.selection_state()
+        nx, ny = _ENV_SIZE_GRID.get(selection.environment, (80, 40))
+        self.run_canvas.set_grid_shape(nx, ny)
+        self.single_canvas.set_grid_shape(nx, ny)
+        self.compare_view.set_grid_shape(nx, ny)
         seeds = [int(s) for s in self._exp_cfg.get("seeds", [selection.seed])]
         effective_algo_cfg = dict(self._algo_cfg)
         effective_algo_cfg["common"] = dict(effective_algo_cfg.get("common", {}))
         effective_algo_cfg["common"]["beta"] = selection.impact
         effective_algo_cfg["common"]["inertia"] = selection.inertia
         flow_cfg = SimulationWorker._build_flow_config_override(selection)
+        nx, ny = _ENV_SIZE_GRID.get(selection.environment, (80, 40))
         exp_id = build_experiment_id(
             flow_cfg=flow_cfg,
             algo_cfg=effective_algo_cfg,
             seeds=seeds,
             algorithm=selection.algorithm,
             ql_episodes=selection.ql_episodes,
+            grid_nx=nx,
+            grid_ny=ny,
         )
         raw_path, _ = results_paths(exp_id, self._analysis_dir)
 
@@ -1669,11 +1730,14 @@ class RiverCrossingMainWindow(QMainWindow):
             return  # records already contain the dijkstra run itself
 
         flow_cfg = SimulationWorker._build_flow_config_override(selection)
+        _nx, _ny = _ENV_SIZE_GRID.get(selection.environment, (80, 40))
         dijk_exp_id = build_experiment_id(
             flow_cfg=flow_cfg,
             algo_cfg=effective_algo_cfg,
             seeds=seeds,
             algorithm="dijkstra",
+            grid_nx=_nx,
+            grid_ny=_ny,
         )
         dijk_path, _ = results_paths(dijk_exp_id, self._analysis_dir)
         if not dijk_path.exists():
@@ -1699,6 +1763,7 @@ class RiverCrossingMainWindow(QMainWindow):
         effective_algo_cfg["common"]["beta"] = selection.impact
         effective_algo_cfg["common"]["inertia"] = selection.inertia
         flow_cfg = SimulationWorker._build_flow_config_override(selection)
+        nx, ny = _ENV_SIZE_GRID.get(selection.environment, (80, 40))
 
         algorithms = [str(a) for a in self._exp_cfg.get("algorithms", [])]
         for algo in algorithms:
@@ -1708,6 +1773,8 @@ class RiverCrossingMainWindow(QMainWindow):
                 seeds=seeds,
                 algorithm=algo,
                 ql_episodes=selection.ql_episodes,
+                grid_nx=nx,
+                grid_ny=ny,
             )
             algo_path, _ = results_paths(algo_exp_id, self._analysis_dir)
             if algo_path.exists():
@@ -1764,19 +1831,16 @@ class RiverCrossingMainWindow(QMainWindow):
         self._append_log("Reset to frame 1.")
 
     def _current_environment(self) -> RiverEnvironment:
-        env_cfg = dict(self._env_cfg)
+        size = self.control_panel.environment_combo.currentText()
+        env_cfg = dict(self._env_cfgs.get(size, self._env_cfg))
         selection = self.control_panel.selection_state()
         vi, vj = selection.flow_vector
-        # Guard: use the config's own flow type if the selection is not a known type.
-        flow_type = selection.environment if selection.environment in ("gaussian", "constant") \
-            else env_cfg.get("flow", {}).get("type", "constant")
         flow_cfg: dict = {
-            "type": flow_type,
+            "type": "gaussian",
             "vector": [vi, vj],
+            "sigma": selection.flow_sigma,
+            "floor": selection.flow_floor,
         }
-        if flow_type == "gaussian":
-            flow_cfg["sigma"] = selection.flow_sigma
-            flow_cfg["floor"] = selection.flow_floor
         env_cfg["flow"] = flow_cfg
         return RiverEnvironment.from_config(env_cfg)
 
@@ -1789,10 +1853,12 @@ class RiverCrossingMainWindow(QMainWindow):
         return CostFunction.from_config(effective_algo_cfg, env.flow)
 
     def _env_start(self) -> tuple[int, int]:
-        return (int(self._env_cfg["start"][0]), int(self._env_cfg["start"][1]))
+        size = self.control_panel.environment_combo.currentText()
+        return _ENV_SIZE_START.get(size, (2, 5))
 
     def _env_goal(self) -> tuple[int, int]:
-        return (int(self._env_cfg["goal"][0]), int(self._env_cfg["goal"][1]))
+        size = self.control_panel.environment_combo.currentText()
+        return _ENV_SIZE_GOAL.get(size, (37, 15))
 
     def _env_flow_fn(self, env: RiverEnvironment) -> Callable[[int, int], tuple[float, float]]:
         """Return a per-cell flow callable from the current environment's flow field."""

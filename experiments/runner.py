@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from algorithms.graph_search import (
-    apf_from_config,
     astar_from_config,
     dijkstra,
     extract_path,
@@ -58,6 +57,7 @@ def run_all_experiments(
     impact_override: float | None = None,
     inertia_override: int | None = None,
     algorithms_override: list[str] | None = None,
+    environments_override: list[str] | None = None,
 ) -> list[ExperimentRunRecord]:
     """Run the configured batch of experiments and optionally save raw results.
 
@@ -69,6 +69,9 @@ def run_all_experiments(
     algorithms_override:
         When provided, only run these algorithms instead of the full list from
         ``experiment.yaml``.  Pass a single-element list to run one algorithm.
+    environments_override:
+        When provided, only run these environments (by name) instead of all
+        environments defined in ``experiment.yaml``.
     """
     config_dir = Path(config_dir)
     algo_cfg = load_algorithm_config(config_dir / "algorithm.yaml")
@@ -84,11 +87,14 @@ def run_all_experiments(
         )
 
     algorithms_to_run = algorithms_override if algorithms_override is not None else list(exp_cfg["algorithms"])
+    envs_to_run: set[str] | None = set(environments_override) if environments_override is not None else None
 
     results: list[ExperimentRunRecord] = []
 
     for env_entry in exp_cfg["environments"]:
         env_name, env_cfg = _resolve_environment_config(config_dir, env_entry, default_env_cfg)
+        if envs_to_run is not None and env_name not in envs_to_run:
+            continue
         if flow_config_override is not None:
             env_cfg = dict(env_cfg)
             env_cfg["flow"] = dict(flow_config_override)
@@ -201,6 +207,9 @@ def _resolve_environment_config(
     default_env_cfg: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     env_name = str(env_entry.get("name", "environment"))
+    size = env_entry.get("size")
+    if size is not None:
+        return env_name, load_env_config(config_dir / "env.yaml", size=size)
     env_path = env_entry.get("env_config")
     if env_path is None:
         return env_name, default_env_cfg
@@ -278,12 +287,6 @@ def _run_single_experiment(
         plan.exploration_path = vi.iteration_paths
         return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
 
-    if algorithm == "apf":
-        t0 = time.perf_counter()
-        plan = apf_from_config(env, cost_fn, algo_cfg["apf"])
-        plan_time = time.perf_counter() - t0
-        return _record_from_plan(env, env_name, algorithm, seed, plan, plan_time=plan_time, max_snapshots=max_snapshots)
-
     if algorithm == "q_learning":
         t0 = time.perf_counter()
         train_result = q_learning_from_config(
@@ -325,9 +328,13 @@ def _plan_result_from_path(
 ) -> Any:
     from algorithms.graph_search.dijkstra import PlanResult
 
+    inertia: int = getattr(cost_fn, "inertia", 0)
     total_cost = 0.0
+    history: tuple = ()
     for state, action in zip(path, actions):
-        total_cost += cost_fn(state, action)
+        total_cost += cost_fn.with_history(state, action, history)
+        if inertia > 0:
+            history = (history + (action,))[-inertia:]
 
     found = bool(path) and path[-1] == env.goal and bool(actions) and env.is_goal(path[-1], actions[-1])
     return PlanResult(

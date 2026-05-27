@@ -38,15 +38,14 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-_DEFAULT_NX = 40
-_DEFAULT_NY = 20
+_DEFAULT_NX = 80
+_DEFAULT_NY = 40
 
 _ALGO_ABBREV: dict[str, str] = {
     "dijkstra": "dijk",
     "a_star": "astar",
     "weighted_a_star": "wastar",
     "dynamic_programming": "dp",
-    "apf": "apf",
     "q_learning": "ql",
 }
 

@@ -24,12 +24,25 @@ import yaml
 
 from core.config_loader import load_algorithm_config
 from experiments.evaluator import evaluate_results
-from experiments.experiment_id import build_experiment_id, results_paths
+from experiments.experiment_id import _DEFAULT_NX, _DEFAULT_NY, build_experiment_id, results_paths
 from experiments.runner import (
     load_experiment_results,
     run_all_experiments,
     save_experiment_results,
 )
+
+def _load_grid_size_map(env_cfg_path: str | Path) -> dict[str, tuple[int, int]]:
+    """Return grid (nx, ny) for each named size variant read from env.yaml."""
+    try:
+        with open(env_cfg_path, encoding="utf-8") as fh:
+            cfg = yaml.safe_load(fh) or {}
+    except (FileNotFoundError, OSError):
+        return {}
+    return {
+        name: (int(v["grid"]["nx"]), int(v["grid"]["ny"]))
+        for name, v in cfg.get("sizes", {}).items()
+        if isinstance(v, dict) and "grid" in v
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +64,7 @@ class SweepPoint:
     inertia: int
     turn_penalty: float
     ql_episodes: int
+    env_size: str           # "small" | "medium" | "large"
     grid_nx: int
     grid_ny: int
     seeds: list[int]
@@ -95,22 +109,34 @@ def load_sweep_config(path: str | Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
+def _as_list(v: Any) -> list:
+    """Wrap a scalar YAML value in a list; pass lists through unchanged."""
+    if isinstance(v, list):
+        return v
+    return [v]
+
+
+def sweep_points(
+    sweep_cfg: dict[str, Any],
+    env_cfg_path: str | Path = "configs/env.yaml",
+) -> Iterator[SweepPoint]:
     """Yield one :class:`SweepPoint` per parameter combination."""
-    seeds: list[int] = [int(s) for s in sweep_cfg.get("seeds", [1])]
-    algorithms: list[str] = list(sweep_cfg.get("algorithms", ["dijkstra"]))
-    flow_types: list[str] = list(sweep_cfg.get("flow_types", ["constant"]))
-    flow_dirs: list[str] = list(sweep_cfg.get("flow_directions", ["up"]))
-    strengths: list[float] = [float(v) for v in sweep_cfg.get("flow_strengths", [1.0])]
-    sigmas: list[float] = [float(v) for v in sweep_cfg.get("sigmas", [5.0])]
-    floor: float = float(sweep_cfg.get("floor", 0.1))
+    seeds: list[int] = [int(s) for s in _as_list(sweep_cfg.get("seeds", [1]))]
+    algorithms: list[str] = list(_as_list(sweep_cfg.get("algorithms", ["dijkstra"])))
+    flow_types: list[str] = list(_as_list(sweep_cfg.get("flow_types", ["gaussian"])))
+    flow_dirs: list[str] = list(_as_list(sweep_cfg.get("flow_directions", ["up"])))
+    strengths: list[float] = [float(v) for v in _as_list(sweep_cfg.get("flow_strengths", [1.0]))]
+    sigmas: list[float] = [float(v) for v in _as_list(sweep_cfg.get("sigmas", [5.0]))]
+    _floor_raw = sweep_cfg.get("floor", 0.1)
+    floor: float = float(_floor_raw[0] if isinstance(_floor_raw, list) else _floor_raw)
     alpha: float = float(sweep_cfg.get("alpha", 1.0))
     beta: float = float(sweep_cfg.get("beta", 1.0))
-    inertias: list[int] = [int(v) for v in sweep_cfg.get("inertias", [0])]
-    ql_episodes_list: list[int] = [int(v) for v in sweep_cfg.get("ql_episodes", [1200])]
+    inertias: list[int] = [int(v) for v in _as_list(sweep_cfg.get("inertias", [0]))]
+    ql_episodes_list: list[int] = [int(v) for v in _as_list(sweep_cfg.get("ql_episodes", [1200]))]
     turn_penalty: float = float(sweep_cfg.get("turn_penalty", 1.0))
-    grid_nx: int = int(sweep_cfg.get("grid_nx", 40))
-    grid_ny: int = int(sweep_cfg.get("grid_ny", 20))
+    env_sizes: list[str] = list(_as_list(sweep_cfg.get("env_sizes", ["large"])))
+    # grid_nx / grid_ny are derived from env_size by reading env.yaml sizes block.
+    _grid_size_map = _load_grid_size_map(env_cfg_path)
 
     for ft in flow_types:
         # sigma sweep only applies to gaussian; for constant use a single dummy value
@@ -130,22 +156,54 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
                         flow_cfg_g["floor"] = floor
                         for inertia in inertias:
                             for ql_ep in ql_episodes_list:
+                                for env_size in env_sizes:
+                                    g_nx, g_ny = _grid_size_map.get(env_size, (_DEFAULT_NX, _DEFAULT_NY))
+                                    yield SweepPoint(
+                                        flow_type=ft,
+                                        flow_dir=fd,
+                                        flow_strength=strength,
+                                        sigma=sigma,
+                                        floor=floor,
+                                        alpha=alpha,
+                                        beta=beta,
+                                        inertia=inertia,
+                                        turn_penalty=turn_penalty,
+                                        ql_episodes=ql_ep,
+                                        env_size=env_size,
+                                        grid_nx=g_nx,
+                                        grid_ny=g_ny,
+                                        seeds=seeds,
+                                        algorithms=algorithms,
+                                        flow_cfg=dict(flow_cfg_g),
+                                        algo_cfg_common={
+                                            "alpha": alpha,
+                                            "beta": beta,
+                                            "inertia": inertia,
+                                            "turn_penalty": turn_penalty,
+                                        },
+                                    )
+                else:
+                    for inertia in inertias:
+                        for ql_ep in ql_episodes_list:
+                            for env_size in env_sizes:
+                                g_nx, g_ny = _grid_size_map.get(env_size, (_DEFAULT_NX, _DEFAULT_NY))
                                 yield SweepPoint(
                                     flow_type=ft,
                                     flow_dir=fd,
                                     flow_strength=strength,
-                                    sigma=sigma,
+                                    sigma=5.0,
                                     floor=floor,
                                     alpha=alpha,
                                     beta=beta,
                                     inertia=inertia,
                                     turn_penalty=turn_penalty,
                                     ql_episodes=ql_ep,
-                                    grid_nx=grid_nx,
-                                    grid_ny=grid_ny,
+                                    env_size=env_size,
+                                    grid_nx=g_nx,
+                                    grid_ny=g_ny,
                                     seeds=seeds,
                                     algorithms=algorithms,
-                                    flow_cfg=dict(flow_cfg_g),
+                                    flow_cfg=dict(flow_cfg),
                                     algo_cfg_common={
                                         "alpha": alpha,
                                         "beta": beta,
@@ -153,37 +211,14 @@ def sweep_points(sweep_cfg: dict[str, Any]) -> Iterator[SweepPoint]:
                                         "turn_penalty": turn_penalty,
                                     },
                                 )
-                else:
-                    for inertia in inertias:
-                        for ql_ep in ql_episodes_list:
-                            yield SweepPoint(
-                                flow_type=ft,
-                                flow_dir=fd,
-                                flow_strength=strength,
-                                sigma=5.0,
-                                floor=floor,
-                                alpha=alpha,
-                                beta=beta,
-                                inertia=inertia,
-                                turn_penalty=turn_penalty,
-                                ql_episodes=ql_ep,
-                                grid_nx=grid_nx,
-                                grid_ny=grid_ny,
-                                seeds=seeds,
-                                algorithms=algorithms,
-                                flow_cfg=dict(flow_cfg),
-                                algo_cfg_common={
-                                    "alpha": alpha,
-                                    "beta": beta,
-                                    "inertia": inertia,
-                                    "turn_penalty": turn_penalty,
-                                },
-                            )
 
 
-def count_sweep_points(sweep_cfg: dict[str, Any]) -> int:
+def count_sweep_points(
+    sweep_cfg: dict[str, Any],
+    env_cfg_path: str | Path = "configs/env.yaml",
+) -> int:
     """Return the total number of (algorithm × parameter) steps in the sweep."""
-    n_points = sum(1 for _ in sweep_points(sweep_cfg))
+    n_points = sum(1 for _ in sweep_points(sweep_cfg, env_cfg_path=env_cfg_path))
     n_algorithms = len(list(sweep_cfg.get("algorithms", ["dijkstra"])))
     return n_points * max(1, n_algorithms)
 
@@ -234,7 +269,7 @@ def run_sweep(
     :class:`SweepResult` for the *last* processed (algorithm, point) step, or
     ``None`` if the sweep was empty.
     """
-    points = list(sweep_points(sweep_cfg))
+    points = list(sweep_points(sweep_cfg, env_cfg_path=config_dir / "env.yaml"))
     n_algorithms = len(points[0].algorithms) if points else 1
     total = len(points) * n_algorithms
     global_step = 0
@@ -277,6 +312,7 @@ def run_sweep(
                     inertia_override=point.inertia,
                     rl_episodes=point.ql_episodes,
                     algorithms_override=[algorithm],
+                    environments_override=[point.env_size],
                 )
                 evaluate_results(result_records, output_path=algo_ev_path)
                 algo_records = [r.to_dict() for r in result_records]

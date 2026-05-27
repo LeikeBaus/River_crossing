@@ -29,9 +29,17 @@ def _require_keys(config: dict[str, Any], required_keys: list[str], config_name:
         raise ConfigError(f"Missing keys in {config_name}: {missing_csv}")
 
 
-def load_env_config(config_path: str | Path) -> dict[str, Any]:
+def load_env_config(config_path: str | Path, size: str | None = None) -> dict[str, Any]:
     path = Path(config_path)
     config = _read_yaml(path)
+
+    # Merge named size variant (grid/start/goal) over the base config when requested.
+    if size is not None:
+        sizes = config.get("sizes", {})
+        if size not in sizes:
+            raise ConfigError(f"Unknown environment size '{size}'. Available: {list(sizes)}")
+        config = {**config, **sizes[size]}
+
     _require_keys(config, ["grid", "flow", "start", "goal", "docking"], "env config")
 
     grid = config["grid"]
@@ -55,7 +63,6 @@ def load_algorithm_config(config_path: str | Path) -> dict[str, Any]:
             "a_star",
             "weighted_a_star",
             "dynamic_programming",
-            "apf",
             "q_learning",
         ],
         "algorithm config",
