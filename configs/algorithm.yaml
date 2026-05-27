@@ -22,11 +22,6 @@ dynamic_programming:
   tolerance: 1.0e-6 # convergence tolerance
   max_iterations: 10000 # maximum number of iterations
 
-apf:
-  k_att: 1.0 # attractive force gain
-  lambda_flow: 0.2 # flow field influence
-  k_dock: 0.3 # docking alignment penalty weight (0 = disabled)
-
 q_learning:
   episodes: 1200 # number of training episodes
   learning_rate: 0.1 # learning rate for Q-learning

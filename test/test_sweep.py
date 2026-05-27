@@ -331,7 +331,7 @@ class SweepConfigLoadTests(unittest.TestCase):
 
     def test_loads_real_sweep_yaml(self) -> None:
         cfg = load_sweep_config("configs/sweep.yaml")
-        self.assertIn("flow_types", cfg)
+        self.assertIn("env_sizes", cfg)
         self.assertIn("inertias", cfg)
         self.assertIn("flow_strengths", cfg)
 

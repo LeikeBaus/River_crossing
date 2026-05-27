@@ -178,27 +178,7 @@ V_{k+1}(s) = min_{a ∈ A} [ c(s, a) + γ V_k(T(s, a)) ]
 
 mit Diskontfaktor γ ∈ (0,1].
 
-### 4.5 Artificial Potential Field (APF)
-
-Das APF verwendet weiterhin ein Potential der Form
-
-Φ(s) = Φ_att(s) + Φ_flow(s),
-
-wird jedoch in der aktuellen Implementierung zusätzlich **andockungsbewusst** geführt. Statt das Schiff nur direkt auf das Ziel auszurichten, wird auch ein gültiger Vorbereich des Ziels berücksichtigt, aus dem der letzte Schritt die Winkelbedingung erfüllen kann.
-
-Attraktives Potential:
-
-Φ_att(s) = 1/2 · k_att · || s − s_target ||²
-
-wobei s_target je nach Situation entweder das eigentliche Ziel oder ein gültiger Vorzustand des Ziels ist.
-
-Strömungseinfluss:
-
-Φ_flow(s) = −λ · ⟨ s, u_flow(s) ⟩
-
-Die diskrete Aktion wird entlang des negativen Gradienten gewählt und um eine Zusatzbewertung ergänzt, die Zustände außerhalb des gültigen Anfahrkorridors benachteiligt. Dadurch vermeidet der APF das frühere Verhalten, direkt geradeaus zum Ziel zu fahren und dort an der Winkelrestriktion zu scheitern.
-
-### 4.6 Reinforcement Learning – Q-Learning
+### 4.5 Reinforcement Learning – Q-Learning
 
 Q-Learning approximiert die optimale Aktionswertfunktion Q* weiterhin tabellarisch, verwendet inzwischen aber eine **Reward-Shaping-Strategie**, damit sich eine stabile Andockpolitik schneller ausbildet. Bei aktiviertem Trägheitsspeicher (inertia > 0) werden Q-Tabellen-Einträge mit Schlüsseln `(s, history_tuple)` gespeichert.
 
@@ -262,8 +242,11 @@ river-crossing/
 │
 ├── configs/
 │   ├── env.yaml
-│   ├── env_constant.yaml
+│   ├── env_small.yaml
+│   ├── env_medium.yaml
+│   ├── env_large.yaml
 │   ├── algorithm.yaml
+│   ├── sweep.yaml
 │   └── experiment.yaml
 │
 ├── core/
@@ -297,7 +280,6 @@ Beispiele:
 - Strömungsmodell und Strömungsvektor (`constant` oder `gaussian`)
 - Gauß'sche Profilparameter (`sigma`, `floor`)
 - Gewichtungsparameter α, β sowie Trägheitsparameter (`inertia`, `turn_penalty`)
-- APF-Parameter (`k_att`, `lambda_flow`)
 - RL-Parameter (α, γ, ε sowie Reward-Shaping)
 - Anzahl Episoden
 - Random Seeds
@@ -322,7 +304,7 @@ Zusätzlich umfasst die UI:
 - Animation mit Play, Pause, Step forward, Step reverse und Reset,
 - Flow-Steuerung über Radiobuttons für die Richtung (↓ Top → Bottom / ↑ Bottom → Top),
 - einen Slider für die Strömungsstärke,
-- Gauß-Profilregler (Sigma, Floor) bei Auswahl des Gauß'schen Strömungstyps,
+- Gauß-Profilregler (Sigma, Floor) — das Strömungsmodell ist stets Gauß'sch,
 - eine zusätzliche **Impact**-Steuerung in Prozent, die intern auf den Gewichtungsparameter β der Kostenfunktion abgebildet wird,
 - ein **Inertia**-Spinbox (0–5) zur Steuerung des Heading-Speichers,- ein **QL episodes**-Auswahlmenü (200 / 500 / 1500) zur Festlegung der Trainingstiefe des Q-Learning,- ein Local-3x3-Panel mit lokaler Nachbarschaft und aktionsbezogenen Kosten.
 
@@ -407,7 +389,7 @@ python -c "from experiments.runner import run_all_experiments; run_all_experimen
 ```
 
 ### 10.4 Run Full Parameter Sweep via UI
-Use the **Run Experiment Batch** toolbar action. The sweep iterates all combinations defined in `configs/sweep.yaml` (currently 3 630 points: flow types × directions × strengths × sigma × floor × alpha × beta × inertia × QL episodes × seeds). Results are cached: points whose output files already exist in `analysis/` are skipped.
+Use the **Run Experiment Batch** toolbar action. The sweep iterates all combinations defined in `configs/sweep.yaml` (currently 360 points: env sizes [small/medium/large] × directions × strengths × sigma × inertia × QL episodes × seeds). Results are cached: points whose output files already exist in `analysis/` are skipped.
 
 ### 10.5 Count Sweep Points
 ```bash

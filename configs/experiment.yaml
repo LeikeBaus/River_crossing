@@ -1,17 +1,18 @@
 seeds: [1]
 
 environments:
-  - name: gaussian
-    env_config: configs/env.yaml
-  - name: constant
-    env_config: configs/env_constant.yaml
+  - name: small
+    size: small
+  - name: medium
+    size: medium
+  - name: large
+    size: large
 
 algorithms:
   - dijkstra
   - a_star
   - weighted_a_star
   - dynamic_programming
-  - apf
   - q_learning
 
 q_learning_episodes: 1200
